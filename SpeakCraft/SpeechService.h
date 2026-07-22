@@ -49,6 +49,12 @@ public:
         return !m_recognizedText.empty();
     }
 
+    /// Whether SAPI has reported microphone sound during the current recognition session
+    bool HasDetectedSound() const
+    {
+        return m_bSoundDetected;
+    }
+
     /// Get available voices
     std::vector<std::wstring> GetAvailableVoices();
 
@@ -76,6 +82,7 @@ private:
     ISpRecoGrammar* m_pRecoGrammar = nullptr;
     HWND m_hwndRecoNotify = nullptr;
     bool m_bRecognizing = false;
+    bool m_bSoundDetected = false;
     bool m_bComInitialized = false;   // true if StartRecognition called CoInitializeEx
     std::wstring m_recognizedText;
 };

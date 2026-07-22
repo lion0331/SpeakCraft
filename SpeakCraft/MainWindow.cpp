@@ -1380,8 +1380,20 @@ void MainWindow::OnSubmitUtterance()
 	}
 	if (utterance.empty())
 	{
-		SetStatus(L"⚠️ 暂未检测到语音。请对着麦克风说话（自然音量），说完后点 [我说完了]。\n   💡 也可以直接在输入框打字然后按 Enter。");
-		return;  // DON'T restart recognition — it's already running
+		if (m_pSpeechService && !m_pSpeechService->IsRecognizing())
+		{
+			m_pSpeechService->StartRecognition(m_hwnd);
+			SetStatus(L"⚠️ 语音识别刚重新启动，请再说一遍后点击 [我说完了]。也可以直接在输入框打字然后按 Enter。");
+		}
+		else if (m_pSpeechService && !m_pSpeechService->HasDetectedSound())
+		{
+			SetStatus(L"⚠️ 语音识别已启动，但没有收到麦克风声音。请检查 Windows 麦克风权限、默认输入设备和输入音量。");
+		}
+		else
+		{
+			SetStatus(L"⚠️ 已收到麦克风声音，但没有形成识别文字。请确认已安装英语语音识别语言包，或在输入框输入后提交。");
+		}
+		return;
 	}
 
 	AppendChatMessage(L"You", utterance);

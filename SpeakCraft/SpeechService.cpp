@@ -64,7 +64,7 @@ bool SpeechService::SpeakAsync(const std::wstring& text, HWND hwndNotify)
 	if (hwndNotify)
 	{
 		m_pVoice->SetNotifyWindowMessage(hwndNotify, WM_SPEECH_COMPLETE, 0, 0);
-		ULONGLONG interest = SPFEI(SPEI_END_INPUT_STREAM) | SPFEI(SPEI_WORD_BOUNDARY);
+		ULONGLONG interest = SPFEI(SPEI_END_INPUT_STREAM);
 		m_pVoice->SetInterest(interest, interest);
 	}
 
@@ -173,7 +173,7 @@ bool SpeechService::StartRecognition(HWND hwndNotify)
 	OutputDebugStringW((L"[STT] SetRecognizer → " + std::to_wstring(hr) + L"\n").c_str());
 	if (FAILED(hr)) return fail();
 
-	IUnknown* pAudio = nullptr;
+	ISpAudio* pAudio = nullptr;
 	hr = SpCreateDefaultObjectFromCategoryId(SPCAT_AUDIOIN, &pAudio);
 	OutputDebugStringW((L"[STT] Default audio input → " + std::to_wstring(hr) + L"\n").c_str());
 	if (FAILED(hr) || !pAudio) return fail();
@@ -194,7 +194,9 @@ bool SpeechService::StartRecognition(HWND hwndNotify)
 
 	const ULONGLONG interest =
 		SPFEI(SPEI_RECOGNITION) | SPFEI(SPEI_FALSE_RECOGNITION) |
-		SPFEI(SPEI_SOUND_START) | SPFEI(SPEI_SOUND_END) | SPFEI(SPEI_INTERFERENCE);
+		SPFEI(SPEI_SOUND_START) | SPFEI(SPEI_SOUND_END) |
+		SPFEI(SPEI_PHRASE_START) | SPFEI(SPEI_HYPOTHESIS) |
+		SPFEI(SPEI_INTERFERENCE);
 	hr = m_pRecoContext->SetInterest(interest, interest);
 	OutputDebugStringW((L"[STT] SetInterest → " + std::to_wstring(hr) + L"\n").c_str());
 	if (FAILED(hr)) return fail();
@@ -218,12 +220,13 @@ bool SpeechService::StartRecognition(HWND hwndNotify)
 
 	if (m_pRecognizer)
 	{
-		hr = m_pRecognizer->SetRecoState(SPRST_ACTIVE);
-		OutputDebugStringW((L"[STT] SetRecoState(ACTIVE) → " + std::to_wstring(hr) + L"\n").c_str());
+		hr = m_pRecognizer->SetRecoState(SPRST_ACTIVE_ALWAYS);
+		OutputDebugStringW((L"[STT] SetRecoState(ACTIVE_ALWAYS) → " + std::to_wstring(hr) + L"\n").c_str());
 		if (FAILED(hr)) return fail();
 	}
 
 	m_recognizedText.clear();
+	m_bSoundDetected = false;
 	m_bRecognizing = true;
 
 	OutputDebugStringW(L"[STT] >>> READY (InProc dictation) — speak now <<<\n");
@@ -234,6 +237,7 @@ void SpeechService::StopRecognition()
 {
 	std::lock_guard<std::recursive_mutex> lock(m_mutex);
 	m_bRecognizing = false;
+	m_bSoundDetected = false;
 
 	if (m_pRecoGrammar)
 	{
@@ -284,7 +288,12 @@ bool SpeechService::HandleSttEvent()
 		switch (spEvent.eEventId)
 		{
 		case SPEI_SOUND_START:
+			m_bSoundDetected = true;
 			OutputDebugStringW(L"[STT] 🎤 Sound detected\n");
+			break;
+		case SPEI_PHRASE_START:
+			m_bSoundDetected = true;
+			OutputDebugStringW(L"[STT] Phrase started\n");
 			break;
 		case SPEI_SOUND_END:
 			OutputDebugStringW(L"[STT] 🔇 Sound ended\n");
