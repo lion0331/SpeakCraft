@@ -52,6 +52,7 @@
 #define IDC_VOICE_RATE          1302
 #define IDC_VOICE_RATE_LABEL    1303
 #define IDC_VOICE_TEST          1304
+#define IDC_RECOGNIZER_LIST     1305
 
 // Chat controls
 #define IDC_CHAT_EDIT           1301

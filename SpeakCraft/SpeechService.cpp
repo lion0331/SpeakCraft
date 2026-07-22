@@ -131,30 +131,114 @@ bool SpeechService::StartRecognition(HWND hwndNotify)
 		return false;
 		};
 
-	// Prefer an English recognizer, then fall back to the system default recognizer.
+	// ── Find a recognizer ──────────────────────────────────
+	// 1) User-specified recognizer  2) English best-match  3) Enumerate English
 	ISpObjectToken* pToken = nullptr;
-	hr = SpFindBestToken(SPCAT_RECOGNIZERS, L"Language=409", nullptr, &pToken);  // en-US
-	if (FAILED(hr))
+
+	// Helper: check whether a recognizer token is English (langid & 0xFF == 0x09)
+	auto isEnglishToken = [](ISpObjectToken* tok) -> bool {
+		LPWSTR pszAttrib = nullptr;
+		if (SUCCEEDED(tok->GetStringValue(L"Language", &pszAttrib)) && pszAttrib)
+		{
+			long langId = wcstol(pszAttrib, nullptr, 16);
+			::CoTaskMemFree(pszAttrib);
+			return ((langId & 0xFF) == 0x09);   // primary lang 0x09 = English
+		}
+		return false;
+	};
+
+	// If the user explicitly chose a recognizer, use it directly
+	if (!m_preferredRecognizer.empty())
 	{
-		hr = SpFindBestToken(SPCAT_RECOGNIZERS, L"Language=809", nullptr, &pToken);  // en-GB
+		IEnumSpObjectTokens* pEnum = nullptr;
+		if (SUCCEEDED(SpEnumTokens(SPCAT_RECOGNIZERS, nullptr, nullptr, &pEnum)) && pEnum)
+		{
+			ISpObjectToken* pCandidate = nullptr;
+			while (pEnum->Next(1, &pCandidate, nullptr) == S_OK)
+			{
+				LPWSTR desc = nullptr;
+				if (SUCCEEDED(SpGetDescription(pCandidate, &desc)) && desc)
+				{
+					if (m_preferredRecognizer == desc)
+					{
+						pToken = pCandidate;
+						::CoTaskMemFree(desc);
+						OutputDebugStringW((L"[STT] Using user-preferred recognizer: " + m_preferredRecognizer + L"\n").c_str());
+						break;
+					}
+					::CoTaskMemFree(desc);
+				}
+				pCandidate->Release();
+			}
+			pEnum->Release();
+		}
+		if (!pToken)
+		{
+			OutputDebugStringW(L"[STT] Preferred recognizer not found; falling back to auto-detect\n");
+		}
 	}
-	if (FAILED(hr) || !pToken)
+
+	if (!pToken)
 	{
-		OutputDebugStringW(L"[STT] English recognizer not found; using default recognizer\n");
-		hr = SpGetDefaultTokenFromCategoryId(SPCAT_RECOGNIZERS, &pToken);
+		hr = SpFindBestToken(SPCAT_RECOGNIZERS, L"Language=409", nullptr, &pToken);  // en-US
+		if (FAILED(hr))
+		{
+			hr = SpFindBestToken(SPCAT_RECOGNIZERS, L"Language=809", nullptr, &pToken);  // en-GB
+		}
+	}
+	if (!pToken)
+	{
+		// Enumerate all recognizers and pick the first English one
+		OutputDebugStringW(L"[STT] SpFindBestToken failed; enumerating all recognizers...\n");
+		IEnumSpObjectTokens* pEnum = nullptr;
+		if (SUCCEEDED(SpEnumTokens(SPCAT_RECOGNIZERS, nullptr, nullptr, &pEnum)) && pEnum)
+		{
+			ISpObjectToken* pCandidate = nullptr;
+			while (pEnum->Next(1, &pCandidate, nullptr) == S_OK)
+			{
+				if (isEnglishToken(pCandidate))
+				{
+					pToken = pCandidate;          // found!  (already AddRef'd by Next)
+					OutputDebugStringW(L"[STT] Found English recognizer via enumeration\n");
+					break;
+				}
+				pCandidate->Release();
+			}
+			pEnum->Release();
+		}
+	}
+	if (!pToken)
+	{
+		OutputDebugStringW(L"[STT] No English recognizer; using system default\n");
+		SpGetDefaultTokenFromCategoryId(SPCAT_RECOGNIZERS, &pToken);
 	}
 
 	WCHAR szLangName[256] = L"default";
-	if (SUCCEEDED(hr) && pToken)
+	if (pToken)
 	{
 		LPWSTR pszId = nullptr;
 		if (SUCCEEDED(pToken->GetId(&pszId)) && pszId)
 		{
 			wcscpy_s(szLangName, pszId); CoTaskMemFree(pszId);
 		}
+		// Get human-readable description of the recognizer token
+		LPWSTR pszDesc = nullptr;
+		if (SUCCEEDED(SpGetDescription(pToken, &pszDesc)) && pszDesc)
+		{
+			m_recognizerLanguage = pszDesc;
+			::CoTaskMemFree(pszDesc);
+		}
+		else
+		{
+			m_recognizerLanguage = szLangName;
+		}
 		OutputDebugStringW((std::wstring(L"[STT] Token: ") + szLangName + L"\n").c_str());
 	}
-	if (FAILED(hr) || !pToken)
+	else
+	{
+		m_recognizerLanguage = L"Unknown (no recognizer found)";
+	}
+	if (!pToken)
 	{
 		OutputDebugStringW(L"[STT] *** No recognizer ***\n");
 		return fail();
@@ -226,6 +310,8 @@ bool SpeechService::StartRecognition(HWND hwndNotify)
 	}
 
 	m_recognizedText.clear();
+	m_hypothesisText.clear();
+	m_falseRecoText.clear();
 	m_bSoundDetected = false;
 	m_bRecognizing = true;
 
@@ -271,8 +357,26 @@ void SpeechService::StopRecognition()
 std::wstring SpeechService::PopRecognizedText()
 {
 	std::lock_guard<std::recursive_mutex> lock(m_mutex);
+	// Prefer final recognition results
 	std::wstring text = m_recognizedText;
 	m_recognizedText.clear();
+
+	// Fallback 1: use last hypothesis (interim result) if no final result
+	if (text.empty() && !m_hypothesisText.empty())
+	{
+		text = m_hypothesisText;
+		m_hypothesisText.clear();
+		OutputDebugStringW((L"[STT] ⚠ Using hypothesis fallback: \"" + text + L"\"\n").c_str());
+	}
+
+	// Fallback 2: use last false-recognition text (low confidence) if nothing else
+	if (text.empty() && !m_falseRecoText.empty())
+	{
+		text = m_falseRecoText;
+		m_falseRecoText.clear();
+		OutputDebugStringW((L"[STT] ⚠ Using false-recognition fallback: \"" + text + L"\"\n").c_str());
+	}
+
 	return text;
 }
 
@@ -326,8 +430,45 @@ bool SpeechService::HandleSttEvent()
 			break;
 		}
 		case SPEI_FALSE_RECOGNITION:
-			OutputDebugStringW(L"[STT] ❌ False recognition\n");
+		{
+			// Collect low-confidence text as fallback — some recognizers only produce false recognitions
+			ISpRecoResult* pFalseResult = spEvent.RecoResult();
+			if (pFalseResult)
+			{
+				LPWSTR pszFalseText = nullptr;
+				if (SUCCEEDED(pFalseResult->GetText(SP_GETWHOLEPHRASE, SP_GETWHOLEPHRASE, TRUE, &pszFalseText, nullptr)) && pszFalseText)
+				{
+					m_falseRecoText = pszFalseText;
+					::CoTaskMemFree(pszFalseText);
+					OutputDebugStringW((L"[STT] ❌ False recognition: \"" + m_falseRecoText + L"\" (low confidence, saved as fallback)\n").c_str());
+				}
+				else
+				{
+					OutputDebugStringW(L"[STT] ❌ False recognition (no text)\n");
+				}
+			}
+			else
+			{
+				OutputDebugStringW(L"[STT] ❌ False recognition (no result object)\n");
+			}
 			break;
+		}
+		case SPEI_HYPOTHESIS:
+		{
+			// Collect interim hypothesis as fallback
+			ISpRecoResult* pHypResult = spEvent.RecoResult();
+			if (pHypResult)
+			{
+				LPWSTR pszHypText = nullptr;
+				if (SUCCEEDED(pHypResult->GetText(SP_GETWHOLEPHRASE, SP_GETWHOLEPHRASE, TRUE, &pszHypText, nullptr)) && pszHypText)
+				{
+					m_hypothesisText = pszHypText;
+					::CoTaskMemFree(pszHypText);
+					OutputDebugStringW((L"[STT] 💭 Hypothesis: \"" + m_hypothesisText + L"\"\n").c_str());
+				}
+			}
+			break;
+		}
 		case SPEI_INTERFERENCE:
 			OutputDebugStringW((L"[STT] ⚠ Interference: " +
 				std::to_wstring(spEvent.Interference()) + L"\n").c_str());
@@ -428,6 +569,36 @@ bool SpeechService::SetVoice(const std::wstring& token)
 	pEnum->Release();
 	pCategory->Release();
 	return found;
+}
+
+// ─── Recognizer selection ──────────────────────────
+
+std::vector<std::wstring> SpeechService::GetAvailableRecognizers()
+{
+	std::vector<std::wstring> recognizers;
+
+	IEnumSpObjectTokens* pEnum = nullptr;
+	HRESULT hr = SpEnumTokens(SPCAT_RECOGNIZERS, nullptr, nullptr, &pEnum);
+	if (FAILED(hr) || !pEnum) return recognizers;
+
+	ISpObjectToken* pToken = nullptr;
+	while (pEnum->Next(1, &pToken, nullptr) == S_OK)
+	{
+		LPWSTR desc = nullptr;
+		if (SUCCEEDED(SpGetDescription(pToken, &desc)) && desc)
+		{
+			recognizers.push_back(desc);
+			::CoTaskMemFree(desc);
+		}
+		pToken->Release();
+	}
+	pEnum->Release();
+	return recognizers;
+}
+
+void SpeechService::SetPreferredRecognizer(const std::wstring& description)
+{
+	m_preferredRecognizer = description;
 }
 
 void SpeechService::SetRate(int rate)

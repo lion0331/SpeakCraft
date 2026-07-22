@@ -27,6 +27,10 @@ public:
     int GetSpeechVolume() const;
     void SetSpeechVolume(int volume);
 
+    // Recognizer settings
+    std::wstring GetRecognizerToken() const;
+    void SetRecognizerToken(const std::wstring& token);
+
     // System prompt template
     std::wstring GetSystemPrompt() const;
     void SetSystemPrompt(const std::wstring& prompt);
@@ -44,6 +48,7 @@ private:
     std::wstring m_apiKey;
     std::wstring m_modelName = L"gpt-4o-mini";
     std::wstring m_voiceToken;          // SAPI voice token
+    std::wstring m_recognizerToken;     // preferred recognizer (empty = auto)
     int m_speechRate = 0;               // -10 to 10
     int m_speechVolume = 100;           // 0 to 100
     std::wstring m_systemPrompt = L"You are an English speaking practice tutor. "

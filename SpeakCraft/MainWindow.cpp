@@ -140,6 +140,7 @@ LRESULT MainWindow::OnCreate()
 
 	ConfigManager::Instance().Load();
 	m_pSpeechService->Initialize();
+	m_pSpeechService->SetPreferredRecognizer(ConfigManager::Instance().GetRecognizerToken());
 	m_pAiService->Initialize(m_hwnd);
 	LessonManager::Instance().Initialize();
 	LearningTracker::Instance().Load();
@@ -1161,7 +1162,9 @@ void MainWindow::StartPronunciationCorrection()
 	{
 		if (!m_pSpeechService->StartRecognition(m_hwnd))
 		{
-			AppendToChatLog(L"⚠️ 语音识别启动失败，请检查 Windows 麦克风权限和语音识别组件。仍可在输入框输入文本后提交。");
+			std::wstring lang = m_pSpeechService->GetRecognizerLanguage();
+			AppendToChatLog(L"⚠️ 语音识别启动失败 (引擎: " + lang +
+				L")。请检查 Windows 麦克风权限和语音识别组件。仍可在输入框输入文本后提交。");
 		}
 	}
 
@@ -1391,7 +1394,38 @@ void MainWindow::OnSubmitUtterance()
 		}
 		else
 		{
-			SetStatus(L"⚠️ 已收到麦克风声音，但没有形成识别文字。请确认已安装英语语音识别语言包，或在输入框输入后提交。");
+			// Sound was detected but SAPI produced no usable recognition text.
+			// Show a detailed dialog with the recognizer language so the user can diagnose.
+			std::wstring lang = m_pSpeechService ? m_pSpeechService->GetRecognizerLanguage() : L"Unknown";
+			std::wstring msg = L"已收到麦克风声音，但语音识别引擎没有返回文字结果。\n\n"
+				L"当前识别引擎: " + lang + L"\n\n"
+				L"常见原因:\n"
+				L"  • 未安装英语语音识别语言包\n"
+				L"    → 请前往 Windows 设置 → 时间和语言 → 语言和区域\n"
+				L"    → 添加语言 → English (United States) → 安装\"语音识别\"功能\n"
+				L"  • 当前识别引擎不是英语，无法识别英语语音\n"
+				L"  • 麦克风输入音量过低或环境噪声过大\n\n"
+				L"解决方法: 在下方输入框输入你说的英语内容后按 Enter 提交。";
+
+			MessageBoxW(m_hwnd, msg.c_str(),
+				L"语音识别失败", MB_OK | MB_ICONWARNING);
+
+			// Restart recognition to give it another chance with fresh state
+			if (m_pSpeechService)
+			{
+				m_pSpeechService->StopRecognition();
+				if (!m_pSpeechService->StartRecognition(m_hwnd))
+				{
+					AppendToChatLog(L"⚠️ 语音识别重新启动失败，请在输入框打字后提交。");
+				}
+				else
+				{
+					AppendToChatLog(L"🔄 语音识别已重新启动 (引擎: " +
+						m_pSpeechService->GetRecognizerLanguage() +
+						L")，请再试一次。或在输入框打字后按 Enter 提交。");
+				}
+			}
+			SetStatus(L"⚠️ 语音识别已重新启动，请重试或打字提交。");
 		}
 		return;
 	}
@@ -1540,7 +1574,9 @@ LRESULT MainWindow::OnSpeechComplete(WPARAM wp, LPARAM lp)
 		{
 			if (!m_pSpeechService->StartRecognition(m_hwnd))
 			{
-				AppendToChatLog(L"⚠️ 语音识别启动失败，请检查 Windows 麦克风权限和语音识别组件。仍可在输入框输入文本后提交。");
+				std::wstring lang = m_pSpeechService->GetRecognizerLanguage();
+				AppendToChatLog(L"⚠️ 语音识别启动失败 (引擎: " + lang +
+					L")。请检查 Windows 麦克风权限和语音识别组件。仍可在输入框输入文本后提交。");
 			}
 		}
 		m_practiceState = PracticeState::Responding;
@@ -1658,6 +1694,30 @@ INT_PTR CALLBACK VoiceSettingsDlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
 			if (idx != LB_ERR)
 				SendMessage(hList, LB_SETCURSEL, idx, 0);
 		}
+
+		// Populate recognizer list (first entry = "Auto (prefer English)")
+		HWND hRecoList = GetDlgItem(hDlg, IDC_RECOGNIZER_LIST);
+		SendMessageW(hRecoList, LB_ADDSTRING, 0,
+			reinterpret_cast<LPARAM>(L"🔄 Auto (prefer English, fallback to default)"));
+		auto recognizers = tempSvc.GetAvailableRecognizers();
+		for (auto& r : recognizers)
+		{
+			SendMessageW(hRecoList, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(r.c_str()));
+		}
+		// Select current recognizer preference
+		std::wstring curReco = cfg.GetRecognizerToken();
+		if (curReco.empty())
+		{
+			SendMessage(hRecoList, LB_SETCURSEL, 0, 0);   // "Auto"
+		}
+		else
+		{
+			LRESULT idx = SendMessageW(hRecoList, LB_FINDSTRINGEXACT, 0,
+				reinterpret_cast<LPARAM>(curReco.c_str()));
+			if (idx != LB_ERR)
+				SendMessage(hRecoList, LB_SETCURSEL, idx, 0);
+		}
+
 		SetDlgItemInt(hDlg, IDC_VOICE_RATE, cfg.GetSpeechRate(), TRUE);
 		return TRUE;
 	}
@@ -1707,6 +1767,31 @@ INT_PTR CALLBACK VoiceSettingsDlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
 				SendMessageW(hList, LB_GETTEXT, idx, reinterpret_cast<LPARAM>(buf));
 				cfg.SetVoiceToken(buf);
 			}
+
+			// Save recognizer preference
+			HWND hRecoList = GetDlgItem(hDlg, IDC_RECOGNIZER_LIST);
+			int recoIdx = (int)SendMessage(hRecoList, LB_GETCURSEL, 0, 0);
+			if (recoIdx == 0 || recoIdx == LB_ERR)
+			{
+				cfg.SetRecognizerToken(L"");   // "Auto" → empty = use English-preference logic
+			}
+			else
+			{
+				wchar_t buf[256] = {};
+				SendMessageW(hRecoList, LB_GETTEXT, recoIdx, reinterpret_cast<LPARAM>(buf));
+				cfg.SetRecognizerToken(buf);
+			}
+
+			// Apply recognizer preference to the live SpeechService
+			if (g_pMainWindow)
+			{
+				auto* pSpeech = g_pMainWindow->GetSpeechService();
+				if (pSpeech)
+				{
+					pSpeech->SetPreferredRecognizer(cfg.GetRecognizerToken());
+				}
+			}
+
 			int rate = (int)GetDlgItemInt(hDlg, IDC_VOICE_RATE, nullptr, TRUE);
 			cfg.SetSpeechRate(std::clamp(rate, -10, 10));
 			cfg.Save();

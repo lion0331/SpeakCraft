@@ -163,6 +163,9 @@ bool ConfigManager::Load()
 	std::wstring voice = ExtractJsonString(json, L"voice_token");
 	if (!voice.empty()) m_voiceToken = voice;
 
+	std::wstring recognizer = ExtractJsonString(json, L"recognizer_token");
+	if (!recognizer.empty()) m_recognizerToken = recognizer;
+
 	m_speechRate = ExtractJsonInt(json, L"speech_rate", 0);
 	m_speechVolume = ExtractJsonInt(json, L"speech_volume", 100);
 
@@ -186,6 +189,7 @@ bool ConfigManager::Save()
 	json += L"  \"api_key\": \"" + m_apiKey + L"\",\n";
 	json += L"  \"model_name\": \"" + m_modelName + L"\",\n";
 	json += L"  \"voice_token\": \"" + m_voiceToken + L"\",\n";
+	json += L"  \"recognizer_token\": \"" + m_recognizerToken + L"\",\n";
 	json += L"  \"speech_rate\": " + std::to_wstring(m_speechRate) + L",\n";
 	json += L"  \"speech_volume\": " + std::to_wstring(m_speechVolume) + L",\n";
 	json += L"  \"system_prompt\": \"" + m_systemPrompt + L"\"\n";
@@ -236,6 +240,15 @@ std::wstring ConfigManager::GetVoiceToken() const
 void ConfigManager::SetVoiceToken(const std::wstring& v)
 {
 	m_voiceToken = v;
+}
+
+std::wstring ConfigManager::GetRecognizerToken() const
+{
+	return m_recognizerToken;
+}
+void ConfigManager::SetRecognizerToken(const std::wstring& v)
+{
+	m_recognizerToken = v;
 }
 
 int ConfigManager::GetSpeechRate() const
