@@ -56,9 +56,15 @@ public:
     /// End free conversation and get vocabulary usage summary
     bool EndFreeConversation();
 
-    /// 5. Grammar Correction: submit speech for sentence-by-sentence correction
-    bool CorrectGrammar(const std::wstring& userSpeech,
-                        const std::wstring& topicContext);
+    /// 2b. End role-play and get performance summary
+    bool EndRolePlay();
+
+    /// 3b. End sentence pattern practice and get score summary
+    bool EndSentencePattern(int correctCount, int totalAttempts);
+
+    /// 5. Pronunciation Correction: submit free speech for pronunciation evaluation
+    bool EvaluateFreeSpeechPronunciation(const std::wstring& userSpeech,
+                        const std::wstring& referenceText);
 
     /// 6. Learning Report: generate learning report summary
     bool GenerateLearningReport(const std::wstring& statsJson);
@@ -94,7 +100,7 @@ private:
                                            const std::wstring& systemPrompt) const;
     std::wstring BuildPatternCheckBody(const std::wstring& content,
                                         const std::wstring& systemPrompt) const;
-    std::wstring BuildGrammarCorrectionBody(const std::wstring& content,
+    std::wstring BuildPronunciationCorrectionBody(const std::wstring& content,
                                              const std::wstring& systemPrompt) const;
     std::wstring BuildReportBody(const std::wstring& statsJson) const;
 

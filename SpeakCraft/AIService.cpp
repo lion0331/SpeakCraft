@@ -612,36 +612,94 @@ bool AIService::EndFreeConversation()
 	return true;
 }
 
-// ─── 5. Grammar Correction ─────────────────────────
+// ─── 2b. End Role Play ─────────────────────────────
 
-bool AIService::CorrectGrammar(const std::wstring& userSpeech,
-	const std::wstring& topicContext)
+bool AIService::EndRolePlay()
 {
 	if (m_processing.load()) return false;
-	m_currentMode = L"grammar_correction";
+	m_currentMode = L"role_play_end";
 
-	std::wstring systemPrompt = L"You are a professional English grammar tutor.\n";
-	systemPrompt += L"Analyze the user's speech sentence by sentence and correct all grammar errors.\n\n";
-	systemPrompt += L"Topic context: " + topicContext + L"\n\n";
-	systemPrompt += L"User's speech:\n\"\"\"\n" + userSpeech + L"\n\"\"\"\n\n";
+	std::wstring systemPrompt = L"The role-play session has ended. "
+		L"Review the user's performance in the dialogue. "
+		L"Provide a brief summary including: overall fluency, grammar accuracy, "
+		L"vocabulary usage, and one specific tip for improvement. "
+		L"Respond in a natural, encouraging tone (not JSON).";
+
+	std::wstring userMsg = L"Please summarize my role-play performance. Tell me what I did well and what to improve.";
+
+	auto& cfg = ConfigManager::Instance();
+	std::wstring body = BuildPatternCheckBody(userMsg, systemPrompt);
+
+	{
+		std::lock_guard<std::mutex> lock(m_historyMutex);
+		m_history.push_back({ L"user", userMsg, std::chrono::system_clock::now() });
+	}
+
+	m_processing.store(true);
+	m_cancelled.store(false);
+	m_workerThread = std::make_unique<std::thread>(&AIService::ProcessRequest, this, body);
+	return true;
+}
+
+// ─── 3b. End Sentence Pattern ──────────────────────
+
+bool AIService::EndSentencePattern(int correctCount, int totalAttempts)
+{
+	if (m_processing.load()) return false;
+	m_currentMode = L"sentence_pattern_end";
+
+	std::wstring systemPrompt = L"The sentence pattern practice has ended. "
+		L"The user got " + std::to_wstring(correctCount) + L" out of " +
+		std::to_wstring(totalAttempts) + L" correct.\n"
+		L"Provide an encouraging summary. If score is low, suggest specific resources or tips. "
+		L"Respond in a natural, motivational tone.";
+
+	std::wstring userMsg = L"Generate a summary for my sentence pattern practice session.";
+
+	std::wstring body = BuildPatternCheckBody(userMsg, systemPrompt);
+	m_processing.store(true);
+	m_cancelled.store(false);
+	m_workerThread = std::make_unique<std::thread>(&AIService::ProcessRequest, this, body);
+	return true;
+}
+
+// ─── 5. Pronunciation Correction (Free Speech) ─────
+
+bool AIService::EvaluateFreeSpeechPronunciation(const std::wstring& userSpeech,
+	const std::wstring& referenceText)
+{
+	if (m_processing.load()) return false;
+	m_currentMode = L"pronunciation_correction";
+
+	std::wstring systemPrompt = L"You are a professional English pronunciation coach.\n";
+	systemPrompt += L"Evaluate the user's spoken English for PRONUNCIATION accuracy, not grammar.\n\n";
+	if (!referenceText.empty()) {
+		systemPrompt += L"Reference/expected text: \"" + referenceText + L"\"\n\n";
+	}
+	systemPrompt += L"User's speech (ASR transcript):\n\"\"\"\n" + userSpeech + L"\n\"\"\"\n\n";
+	systemPrompt += L"Evaluate pronunciation quality. Focus on:\n";
+	systemPrompt += L"- Phoneme accuracy (individual sounds)\n";
+	systemPrompt += L"- Word stress and intonation patterns\n";
+	systemPrompt += L"- Linking and connected speech\n";
+	systemPrompt += L"- Rhythm and fluency\n\n";
 	systemPrompt += L"Respond in JSON format:\n";
 	systemPrompt += L"{\n";
-	systemPrompt += L"  \"overall_grammar_score\": 75,\n";
-	systemPrompt += L"  \"corrections\": [\n";
-	systemPrompt += L"    {\n";
-	systemPrompt += L"      \"original\": \"<original sentence>\",\n";
-	systemPrompt += L"      \"corrected\": \"<corrected version>\",\n";
-	systemPrompt += L"      \"explanation\": \"<grammar point>\",\n";
-	systemPrompt += L"      \"error_type\": \"<tense/article/preposition/word_order/etc>\"\n";
-	systemPrompt += L"    }\n";
+	systemPrompt += L"  \"overall_pronunciation_score\": 75,\n";
+	systemPrompt += L"  \"accuracy_breakdown\": {\n";
+	systemPrompt += L"    \"phonemes\": 80,\n";
+	systemPrompt += L"    \"stress\": 70,\n";
+	systemPrompt += L"    \"intonation\": 75,\n";
+	systemPrompt += L"    \"fluency\": 70\n";
+	systemPrompt += L"  },\n";
+	systemPrompt += L"  \"word_results\": [\n";
+	systemPrompt += L"    {\"word\": \"<word>\", \"score\": \"accurate/fair/needs_work\", \"tip\": \"<specific tip>\"}\n";
 	systemPrompt += L"  ],\n";
-	systemPrompt += L"  \"summary\": \"<overall assessment>\",\n";
-	systemPrompt += L"  \"strengths\": [\"<what user did well>\"],\n";
-	systemPrompt += L"  \"weak_areas\": [\"<what needs improvement>\"]\n";
+	systemPrompt += L"  \"summary\": \"<overall pronunciation assessment>\",\n";
+	systemPrompt += L"  \"tips\": [\"<actionable pronunciation tip 1>\", \"<tip 2>\"]\n";
 	systemPrompt += L"}\n";
-	systemPrompt += L"Only include sentences that have errors. If a sentence is correct, don't include it.";
+	systemPrompt += L"Use Chinese for explanations and tips if the user appears to be a Chinese speaker.";
 
-	std::wstring body = BuildGrammarCorrectionBody(userSpeech, systemPrompt);
+	std::wstring body = BuildPronunciationCorrectionBody(userSpeech, systemPrompt);
 	m_processing.store(true);
 	m_cancelled.store(false);
 	m_workerThread = std::make_unique<std::thread>(&AIService::ProcessRequest, this, body);
@@ -708,7 +766,7 @@ std::wstring AIService::BuildPatternCheckBody(const std::wstring& content,
 	return body;
 }
 
-std::wstring AIService::BuildGrammarCorrectionBody(const std::wstring& content,
+std::wstring AIService::BuildPronunciationCorrectionBody(const std::wstring& content,
 	const std::wstring& systemPrompt) const
 {
 	auto& cfg = ConfigManager::Instance();

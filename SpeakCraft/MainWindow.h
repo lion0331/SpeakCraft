@@ -18,13 +18,19 @@ public:
 	bool Create(int nCmdShow);
 
 	/// Get the HWND
-	HWND GetHwnd() const { return m_hwnd; }
+	HWND GetHwnd() const
+	{
+		return m_hwnd;
+	}
 
 	/// Run the message loop
 	static int Run();
 
 	/// Access SpeechService for dialogs
-	SpeechService* GetSpeechService() { return m_pSpeechService.get(); }
+	SpeechService* GetSpeechService()
+	{
+		return m_pSpeechService.get();
+	}
 
 private:
 	// ─── Window Procedure ─────────────────────────
@@ -71,7 +77,6 @@ private:
 
 	// ─── Mode 3: Sentence Pattern ────────────────
 	void StartSentencePattern();
-	void CheckPatternAnswer();
 	void ProcessPatternResult(const std::wstring& aiResponse);
 
 	// ─── Mode 4: Free Conversation ───────────────
@@ -79,10 +84,10 @@ private:
 	void EndFreeConversation();
 	void ProcessFreeConvResult(const std::wstring& aiResponse);
 
-	// ─── Mode 5: Grammar Correction ──────────────
-	void StartGrammarCorrection();
-	void SubmitGrammarCheck(const std::wstring& speech);
-	void ProcessGrammarResult(const std::wstring& aiResponse);
+	// ─── Mode 5: Pronunciation Correction ────────
+	void StartPronunciationCorrection();
+	void SubmitPronunciationCheck(const std::wstring& speech);
+	void ProcessPronunciationCorrectionResult(const std::wstring& aiResponse);
 
 	// ─── Mode 6: Learning Report ─────────────────
 	void ShowLearningReport();
@@ -90,6 +95,7 @@ private:
 	// ─── Speech / Practice ────────────────────────
 	void StartPractice();
 	void StopPractice();
+	void OnSubmitUtterance();  // per-sentence: "I'm done speaking" → submit for evaluation
 	void ReadLessonAloud();
 
 	// ─── Settings ─────────────────────────────────
@@ -111,9 +117,9 @@ private:
 	HWND m_hwndLessonTree = nullptr;      // Left panel: TreeView
 	HWND m_hwndLessonContent = nullptr;   // Right upper: RichEdit for lesson content
 	HWND m_hwndChatHistory = nullptr;     // Right middle: ListBox for chat/output
-	HWND m_hwndChatInput = nullptr;       // Chat input
-	HWND m_hwndSendBtn = nullptr;         // Send button
-	HWND m_hwndRecordBtn = nullptr;       // Record / Action button
+	HWND m_hwndChatInput = nullptr;       // Chat input (optional text fallback)
+	HWND m_hwndRecordBtn = nullptr;       // Per-sentence submit / Start button
+	HWND m_hwndEndBtn = nullptr;          // End entire practice session (hidden when idle)
 	HWND m_hwndPlayBtn = nullptr;         // Read aloud button
 	HWND m_hwndStatusBar = nullptr;       // Status bar
 
@@ -137,8 +143,8 @@ private:
 	std::vector<std::wstring> m_shadowSentences;
 	size_t m_shadowIndex = 0;
 
-	// Mode 5: grammar correction temp storage
-	std::wstring m_grammarSpeechBuffer;
+	// Mode 5: pronunciation correction temp storage (ASR transcript)
+	std::wstring m_pronunciationSpeechBuffer;
 
 	// ─── Lesson State ──────────────────────────────
 	const Lesson* m_pCurrentLesson = nullptr;

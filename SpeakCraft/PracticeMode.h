@@ -11,7 +11,7 @@ enum class PracticeModeType {
     RolePlay = 1,           // 角色扮演 — scripted dialogue role-play
     SentencePattern = 2,    // 句型替换 — key pattern + keyword substitution
     FreeConversation = 3,   // 自由对话 — topic-based free chat
-    GrammarCorrection = 4,  // 语法纠错 — speak freely, get grammar corrections
+    PronunciationCorrection = 4,  // 发音纠错 — speak freely, AI evaluates pronunciation
     LearningReport = 5      // 学习追踪 — view progress & reports
 };
 

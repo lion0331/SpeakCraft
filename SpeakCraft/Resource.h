@@ -27,6 +27,7 @@
 #define IDC_SEND_BTN            1105
 #define IDC_RECORD_BTN          1106
 #define IDC_PLAY_BTN            1107
+#define IDC_END_BTN             1116    // End Practice button
 #define IDC_STATUS_BAR          1108
 #define IDC_SPLITTER            1109
 
@@ -72,3 +73,5 @@
 #define WM_SPEECH_RESULT        (WM_USER + 101)
 #define WM_SPEECH_COMPLETE      (WM_USER + 102)
 #define WM_UPDATE_STATUS        (WM_USER + 103)
+#define WM_USER_STT_EVENT       (WM_USER + 104)   // SAPI recognition event
+#define WM_USER_STT_RESULT      (WM_USER + 105)   // wParam = heap-allocated wstring*
