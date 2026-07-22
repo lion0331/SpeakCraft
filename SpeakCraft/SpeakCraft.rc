@@ -1,0 +1,134 @@
+﻿// SpeakCraft Resource File
+// Menu, Dialog, String Table, and Version Info definitions
+
+#include <windows.h>
+#include "Resource.h"
+
+// ─── Icon ─────────────────────────────────────────
+// Icon is loaded from system default — replace with custom app.ico
+// IDI_APP_ICON        ICON    "app.ico"
+
+// ─── Main Menu ────────────────────────────────────
+IDR_MAIN_MENU MENU
+BEGIN
+    POPUP "&File"
+    BEGIN
+        MENUITEM "E&xit\tAlt+F4",         IDM_FILE_EXIT
+    END
+    POPUP "&Practice"
+    BEGIN
+        MENUITEM "&Start Practice\tF5",   IDM_PRACTICE_START
+        MENUITEM "&Stop Practice\tEsc",   IDM_PRACTICE_STOP
+        MENUITEM SEPARATOR
+        MENUITEM "&Next Lesson\tCtrl+N",  IDM_PRACTICE_NEXT
+        MENUITEM "&Previous Lesson\tCtrl+P", IDM_PRACTICE_PREV
+    END
+    POPUP "&Settings"
+    BEGIN
+        MENUITEM "&API Configuration...", IDM_SETTINGS_APIKEY
+        MENUITEM "&Voice Settings...",    IDM_SETTINGS_VOICE
+    END
+    POPUP "&Help"
+    BEGIN
+        MENUITEM "&About SpeakCraft...",  IDM_HELP_ABOUT
+    END
+END
+
+// ─── Settings Dialog ──────────────────────────────
+IDD_SETTINGS DIALOGEX 0, 0, 420, 260
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "API Configuration — SpeakCraft"
+FONT 9, "Segoe UI", 400, 0, 0x0
+BEGIN
+    GROUPBOX    "AI API Settings",        -1,             10, 10, 400, 180
+    LTEXT       "API &Endpoint URL:",     -1,             25, 30, 120, 12
+    EDITTEXT     IDC_API_ENDPOINT,                         150, 28, 245, 14, ES_AUTOHSCROLL
+    LTEXT       "API &Key:",             -1,             25, 50, 120, 12
+    EDITTEXT     IDC_API_KEY,                              150, 48, 245, 14, ES_AUTOHSCROLL | ES_PASSWORD
+    LTEXT       "&Model Name:",          -1,             25, 70, 120, 12
+    EDITTEXT     IDC_MODEL_NAME,                           150, 68, 245, 14, ES_AUTOHSCROLL
+    LTEXT       "Supports OpenAI, Azure OpenAI, and compatible APIs.", -1, 25, 90, 370, 12
+    LTEXT       "Get your API key from platform.openai.com or your provider.", -1, 25, 104, 370, 12
+    PUSHBUTTON  "&Test Connection",       IDC_TEST_CONNECTION, 150, 130, 120, 24
+    PUSHBUTTON  "&Save",                  IDC_SAVE_SETTINGS,   280, 130, 80, 24
+    PUSHBUTTON  "Cancel",                 IDCANCEL,            370, 130, 50, 24
+
+    GROUPBOX    "Voice Settings",         -1,             10, 200, 400, 50
+    LTEXT       "Voice settings are configured in Voice Settings menu.", -1, 25, 218, 370, 16
+END
+
+// ─── Voice Settings Dialog ────────────────────────
+IDD_VOICE_SETTINGS DIALOGEX 0, 0, 380, 260
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Voice Settings — SpeakCraft"
+FONT 9, "Segoe UI", 400, 0, 0x0
+BEGIN
+    LTEXT       "Select &TTS Voice:",     -1,              15, 15, 100, 12
+    LISTBOX      IDC_VOICE_LIST,                            15, 30, 350, 140, LBS_STANDARD | WS_VSCROLL | WS_TABSTOP
+    LTEXT       "Speech &Rate:",          -1,              15, 185, 80, 12
+    EDITTEXT     IDC_VOICE_RATE,                            100, 183, 40, 14, ES_NUMBER
+    LTEXT       "(-10 slow ... 0 normal ... +10 fast)",  IDC_VOICE_RATE_LABEL, 150, 185, 200, 12
+    PUSHBUTTON  "&Test Voice",            IDC_VOICE_TEST,   15, 215, 80, 24
+    PUSHBUTTON  "&Save",                  IDOK,             200, 215, 70, 24
+    PUSHBUTTON  "Cancel",                 IDCANCEL,         280, 215, 70, 24
+END
+
+// ─── About Dialog ──────────────────────────────────
+IDD_ABOUT DIALOGEX 0, 0, 320, 200
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "About SpeakCraft"
+FONT 9, "Segoe UI", 400, 0, 0x0
+BEGIN
+    LTEXT       "SpeakCraft v1.0",       -1,             20, 25, 200, 16
+    LTEXT       "AI-Powered English Speaking Practice Assistant", -1, 65, 42, 230, 12
+    LTEXT       "Built with New Concept English (新概念英语) as the", -1, 65, 58, 230, 12
+    LTEXT       "primary curriculum. Extensible to other textbooks.", -1, 65, 72, 230, 12
+    LTEXT       "",                      -1,             20, 100, 280, 1, SS_ETCHEDHORZ
+    LTEXT       "Technology Stack:",     -1,             20, 108, 280, 12
+    LTEXT       "• C++20 / WinAPI / x64", -1,            30, 124, 260, 12
+    LTEXT       "• Windows SAPI for TTS (Text-to-Speech)", -1, 30, 140, 260, 12
+    LTEXT       "• OpenAI-compatible API for AI conversation", -1, 30, 156, 260, 12
+    LTEXT       "• RichEdit 4.1 for content display", -1, 30, 172, 260, 12
+    DEFPUSHBUTTON "OK",                  IDOK,           135, 185, 50, 14
+END
+
+// ─── String Table ──────────────────────────────────
+STRINGTABLE
+BEGIN
+    IDS_APP_TITLE       "SpeakCraft — AI英语口语练习助手"
+    IDS_READY           "Ready"
+    IDS_RECORDING       "🎤 Recording..."
+    IDS_PROCESSING      "⏳ Processing with AI..."
+    IDS_ERROR_API       "API Error: Check your configuration in Settings."
+    IDS_NO_LESSON       "Please select a lesson from the left panel."
+END
+
+// ─── Version Info ──────────────────────────────────
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          0x40004L
+FILETYPE        0x1L
+FILESUBTYPE     0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",         "SpeakCraft"
+            VALUE "FileDescription",     "AI-Powered English Speaking Practice Assistant"
+            VALUE "FileVersion",         "1.0.0.0"
+            VALUE "InternalName",        "SpeakCraft"
+            VALUE "LegalCopyright",      "Copyright © 2024"
+            VALUE "OriginalFilename",    "SpeakCraft.exe"
+            VALUE "ProductName",         "SpeakCraft"
+            VALUE "ProductVersion",      "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="SpeakCraft/SpeakCraft.vcxproj" Id="39fea8b2-6ab5-4fa4-9173-1d0a762eecaa" />
+</Solution>
