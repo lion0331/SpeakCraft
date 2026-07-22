@@ -1,9 +1,9 @@
 ﻿#pragma once
 #include "framework.h"
-#include <chrono>
 
 /// Windows SAPI-based speech service for TTS (text-to-speech) and STT (speech-to-text)
-class SpeechService {
+class SpeechService
+{
 public:
     SpeechService();
     ~SpeechService();
@@ -31,7 +31,10 @@ public:
     void StopRecognition();
 
     /// Whether recognition is currently active
-    bool IsRecognizing() const { return m_bRecognizing; }
+    bool IsRecognizing() const
+    {
+        return m_bRecognizing;
+    }
 
     /// Handle SAPI STT event (called from WndProc on WM_USER_STT_EVENT)
     /// Returns true if event was consumed
@@ -41,7 +44,10 @@ public:
     std::wstring PopRecognizedText();
 
     /// Check if recognition is active and has pending recognized text
-    bool HasRecognizedText() const { return !m_recognizedText.empty(); }
+    bool HasRecognizedText() const
+    {
+        return !m_recognizedText.empty();
+    }
 
     /// Get available voices
     std::vector<std::wstring> GetAvailableVoices();
@@ -67,10 +73,9 @@ private:
     // Speech recognition
     ISpRecognizer* m_pRecognizer = nullptr;
     ISpRecoContext* m_pRecoContext = nullptr;
+    ISpRecoGrammar* m_pRecoGrammar = nullptr;
     HWND m_hwndRecoNotify = nullptr;
     bool m_bRecognizing = false;
     bool m_bComInitialized = false;   // true if StartRecognition called CoInitializeEx
-    bool m_bSharedRecognizer = false; // true if using Shared (non-English fallback)
     std::wstring m_recognizedText;
-    std::chrono::steady_clock::time_point m_lastStartAttempt;  // cooldown guard
 };

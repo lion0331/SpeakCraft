@@ -102,22 +102,24 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wp, LPARAM lp)
 		return 0;
 	case WM_USER_STT_RESULT:
 		// Recognition phrase arrived — append to input box
+	{
+		std::wstring* pText = reinterpret_cast<std::wstring*>(wp);
+		if (pText)
 		{
-			std::wstring* pText = reinterpret_cast<std::wstring*>(wp);
-			if (pText) {
-				// Append to chat input so user can see/edit before submitting
-				int curLen = GetWindowTextLengthW(m_hwndChatInput);
-				SendMessageW(m_hwndChatInput, EM_SETSEL, curLen, curLen);
-				std::wstring toInsert = *pText + L" ";
-				SendMessageW(m_hwndChatInput, EM_REPLACESEL, TRUE,
-					reinterpret_cast<LPARAM>(toInsert.c_str()));
-				delete pText;
-			}
+			// Append to chat input so user can see/edit before submitting
+			int curLen = GetWindowTextLengthW(m_hwndChatInput);
+			SendMessageW(m_hwndChatInput, EM_SETSEL, curLen, curLen);
+			std::wstring toInsert = *pText + L" ";
+			SendMessageW(m_hwndChatInput, EM_REPLACESEL, TRUE,
+				reinterpret_cast<LPARAM>(toInsert.c_str()));
+			delete pText;
 		}
-		return 0;
+	}
+	return 0;
 	case WM_KEYDOWN:
 		// Enter key in chat input → submit typed response
-		if (wp == VK_RETURN && GetFocus() == g_pMainWindow->m_hwndChatInput) {
+		if (wp == VK_RETURN && GetFocus() == g_pMainWindow->m_hwndChatInput)
+		{
 			g_pMainWindow->SendChatMessage();
 			return 0;
 		}
@@ -371,7 +373,8 @@ void MainWindow::SwitchMode(PracticeModeType newMode)
 
 void MainWindow::UpdateModeButtons()
 {
-	for (int i = 0; i < 6; i++) {
+	for (int i = 0; i < 6; i++)
+	{
 		bool isActive = (static_cast<int>(m_currentMode) == i);
 		SendMessage(m_hwndModeBtns[i], BM_SETSTYLE,
 			isActive ? BS_PUSHBUTTON : BS_PUSHBUTTON | BS_PUSHLIKE, TRUE);
@@ -382,9 +385,11 @@ void MainWindow::UpdateModeButtons()
 	ShowWindow(m_hwndEndBtn, active ? SW_SHOW : SW_HIDE);
 	EnableWindow(m_hwndEndBtn, active);
 
-	if (!active) {
+	if (!active)
+	{
 		const wchar_t* label = L"▶ Start";
-		switch (m_currentMode) {
+		switch (m_currentMode)
+		{
 		case PracticeModeType::TextShadowing:        label = L"▶ 开始跟读"; break;
 		case PracticeModeType::RolePlay:             label = L"▶ 开始角色扮演"; break;
 		case PracticeModeType::SentencePattern:       label = L"▶ 出题"; break;
@@ -394,10 +399,14 @@ void MainWindow::UpdateModeButtons()
 		}
 		SetWindowTextW(m_hwndRecordBtn, label);
 		EnableWindow(m_hwndRecordBtn, TRUE);
-	} else if (m_practiceState == PracticeState::Processing) {
+	}
+	else if (m_practiceState == PracticeState::Processing)
+	{
 		SetWindowTextW(m_hwndRecordBtn, L"⏳ 处理中...");
 		EnableWindow(m_hwndRecordBtn, FALSE);
-	} else {
+	}
+	else
+	{
 		SetWindowTextW(m_hwndRecordBtn, L"✅ 我说完了");
 		EnableWindow(m_hwndRecordBtn, TRUE);
 	}
@@ -655,9 +664,12 @@ LRESULT MainWindow::OnCommand(WPARAM wp, LPARAM lp)
 	case IDC_RECORD_BTN:
 		if (code == BN_CLICKED || code == 0)
 		{
-			if (m_practiceState != PracticeState::Idle) {
+			if (m_practiceState != PracticeState::Idle)
+			{
 				OnSubmitUtterance();          // active → submit this sentence
-			} else {
+			}
+			else
+			{
 				StartPractice();              // idle → start session
 			}
 		}
@@ -696,7 +708,8 @@ LRESULT MainWindow::OnCommand(WPARAM wp, LPARAM lp)
 void MainWindow::SendChatMessage()
 {
 	// Enter key = same as clicking "✅ 我说完了"
-	if (m_practiceState != PracticeState::Idle) {
+	if (m_practiceState != PracticeState::Idle)
+	{
 		OnSubmitUtterance();
 	}
 }
@@ -806,7 +819,8 @@ void MainWindow::StopPractice()
 		rec.lessonNumber = m_pCurrentLesson ? m_pCurrentLesson->lessonNumber : 0;
 		rec.lessonTitle = m_pCurrentLesson ? m_pCurrentLesson->title : L"";
 		rec.scores = scores;
-		if (m_sessionStartTime.time_since_epoch().count() > 0) {
+		if (m_sessionStartTime.time_since_epoch().count() > 0)
+		{
 			rec.durationSeconds = (int)std::chrono::duration_cast<std::chrono::seconds>(
 				std::chrono::steady_clock::now() - m_sessionStartTime).count();
 		}
@@ -828,11 +842,14 @@ void MainWindow::StopPractice()
 		break;
 
 	case PracticeModeType::SentencePattern:
-		if (m_pPatternSession) {
+		if (m_pPatternSession)
+		{
 			AppendToChatLog(L"⏹ 句型替换已结束 — 成绩: " +
 				std::to_wstring(m_pPatternSession->correctCount) + L"/" +
 				std::to_wstring(m_pPatternSession->totalAttempts) + L" 正确");
-		} else {
+		}
+		else
+		{
 			AppendToChatLog(L"⏹ 句型替换已结束");
 		}
 		makeRec(PracticeModeType::SentencePattern, { 60.0, 55.0, 50.0, 60.0 });
@@ -845,19 +862,22 @@ void MainWindow::StopPractice()
 
 	case PracticeModeType::PronunciationCorrection:
 		// This mode needs AI evaluation — submit what we have
-		if (!m_pronunciationSpeechBuffer.empty()) {
+		if (!m_pronunciationSpeechBuffer.empty())
+		{
 			SubmitPronunciationCheck(L"");
 			return;  // wait for AI evaluation result
 		}
 		// check typed input as fallback
 		{
 			int len = GetWindowTextLengthW(m_hwndChatInput);
-			if (len > 0) {
+			if (len > 0)
+			{
 				std::wstring input(len + 1, L'\0');
 				GetWindowTextW(m_hwndChatInput, &input[0], len + 1);
 				input.resize(len);
 				SetWindowTextW(m_hwndChatInput, L"");
-				if (!input.empty()) {
+				if (!input.empty())
+				{
 					m_pronunciationSpeechBuffer = input;
 					SubmitPronunciationCheck(L"");
 					return;
@@ -980,7 +1000,8 @@ void MainWindow::ProcessPronunciationResult(const std::wstring& aiResponse)
 		rec.lessonNumber = m_pCurrentLesson ? m_pCurrentLesson->lessonNumber : 0;
 		rec.lessonTitle = m_pCurrentLesson ? m_pCurrentLesson->title : L"";
 		rec.scores = SkillScores{ 60.0, 50.0, 70.0, 65.0 };
-		if (m_sessionStartTime.time_since_epoch().count() > 0) {
+		if (m_sessionStartTime.time_since_epoch().count() > 0)
+		{
 			rec.durationSeconds = (int)std::chrono::duration_cast<std::chrono::seconds>(
 				std::chrono::steady_clock::now() - m_sessionStartTime).count();
 		}
@@ -1138,7 +1159,10 @@ void MainWindow::StartPronunciationCorrection()
 	// Start speech recognition if available
 	if (m_pSpeechService)
 	{
-		m_pSpeechService->StartRecognition(m_hwnd);
+		if (!m_pSpeechService->StartRecognition(m_hwnd))
+		{
+			AppendToChatLog(L"⚠️ 语音识别启动失败，请检查 Windows 麦克风权限和语音识别组件。仍可在输入框输入文本后提交。");
+		}
 	}
 
 	m_practiceState = PracticeState::Listening;
@@ -1155,22 +1179,25 @@ void MainWindow::SubmitPronunciationCheck(const std::wstring& speech)
 	std::wstring sttText;
 	if (m_pSpeechService) sttText = m_pSpeechService->PopRecognizedText();
 
-	// Collect typed text
+	// The live STT result is mirrored into the input box. If the user edited it,
+	// the input box is the source of truth for the submitted utterance.
 	int len = GetWindowTextLengthW(m_hwndChatInput);
-	if (len > 0) {
+	if (len > 0)
+	{
 		std::wstring input(len + 1, L'\0');
 		GetWindowTextW(m_hwndChatInput, &input[0], len + 1);
 		input.resize(len);
 		SetWindowTextW(m_hwndChatInput, L"");
-		if (!sttText.empty()) sttText += L" ";
-		sttText += input;
+		sttText = input;
 	}
-	if (!sttText.empty()) {
+	if (!sttText.empty())
+	{
 		if (!m_pronunciationSpeechBuffer.empty()) m_pronunciationSpeechBuffer += L" ";
 		m_pronunciationSpeechBuffer += sttText;
 	}
 
-	if (m_pronunciationSpeechBuffer.empty()) {
+	if (m_pronunciationSpeechBuffer.empty())
+	{
 		MessageBoxW(m_hwnd,
 			L"未检测到语音输入。请对着麦克风说话后点击 [结束练习]，或在输入框打字后按 Enter。",
 			L"No Speech Input", MB_OK | MB_ICONINFORMATION);
@@ -1338,19 +1365,21 @@ void MainWindow::OnSubmitUtterance()
 
 	std::wstring utterance = sttText;
 	int len = GetWindowTextLengthW(m_hwndChatInput);
-	if (len > 0) {
+	if (len > 0)
+	{
 		std::wstring typed(len + 1, L'\0');
 		GetWindowTextW(m_hwndChatInput, &typed[0], len + 1);
 		typed.resize(len);
 		SetWindowTextW(m_hwndChatInput, L"");
-		if (!utterance.empty() && !typed.empty()) utterance += L" ";
-		utterance += typed;
+		utterance = typed;
 	}
-	if (utterance.empty() && !m_pronunciationSpeechBuffer.empty()) {
+	if (utterance.empty() && !m_pronunciationSpeechBuffer.empty())
+	{
 		utterance = m_pronunciationSpeechBuffer;
 		m_pronunciationSpeechBuffer.clear();
 	}
-	if (utterance.empty()) {
+	if (utterance.empty())
+	{
 		SetStatus(L"⚠️ 暂未检测到语音。请对着麦克风说话（自然音量），说完后点 [我说完了]。\n   💡 也可以直接在输入框打字然后按 Enter。");
 		return;  // DON'T restart recognition — it's already running
 	}
@@ -1365,7 +1394,8 @@ void MainWindow::OnSubmitUtterance()
 	{
 	case PracticeModeType::TextShadowing:
 		// Send user's spoken text + reference sentence for pronunciation eval
-		if (m_shadowIndex < m_shadowSentences.size()) {
+		if (m_shadowIndex < m_shadowSentences.size())
+		{
 			m_pAiService->EvaluatePronunciation(utterance,
 				m_shadowSentences[m_shadowIndex]);
 		}
@@ -1376,15 +1406,15 @@ void MainWindow::OnSubmitUtterance()
 		break;
 
 	case PracticeModeType::SentencePattern:
-		{
-			auto& s = m_pPatternSession;
-			m_pAiService->CheckPatternAnswer(utterance,
-				s ? s->corePattern : L"",
-				(s && !s->exercises.empty()) ? s->exercises.back().keyword : L"",
-				(s && !s->exercises.empty()) ? s->exercises.back().expectedAnswer : L"");
-			if (s) s->totalAttempts++;
-		}
-		break;
+	{
+		auto& s = m_pPatternSession;
+		m_pAiService->CheckPatternAnswer(utterance,
+			s ? s->corePattern : L"",
+			(s && !s->exercises.empty()) ? s->exercises.back().keyword : L"",
+			(s && !s->exercises.empty()) ? s->exercises.back().expectedAnswer : L"");
+		if (s) s->totalAttempts++;
+	}
+	break;
 
 	case PracticeModeType::FreeConversation:
 		m_pAiService->ContinueFreeConversation(utterance);
@@ -1394,18 +1424,20 @@ void MainWindow::OnSubmitUtterance()
 		m_pronunciationSpeechBuffer += utterance + L" ";
 		m_practiceState = PracticeState::Listening;
 		UpdateModeButtons();
-		// Re-start recognition for continued speaking
-		if (m_pSpeechService) m_pSpeechService->StartRecognition(m_hwnd);
+		if (m_pSpeechService && !m_pSpeechService->StartRecognition(m_hwnd))
+		{
+			AppendToChatLog(L"⚠️ 语音识别未能重新启动，可继续在输入框输入文本。");
+		}
 		SetStatus(L"🎙️ Added. Keep speaking, click [结束练习] to evaluate.");
 		break;
 
 	default:
-		{
-			std::wstring ctx = m_pCurrentLesson
-				? LessonManager::Instance().BuildPracticeContext(*m_pCurrentLesson) : L"";
-			m_pAiService->SendMessage(utterance, ctx);
-		}
-		break;
+	{
+		std::wstring ctx = m_pCurrentLesson
+			? LessonManager::Instance().BuildPracticeContext(*m_pCurrentLesson) : L"";
+		m_pAiService->SendMessage(utterance, ctx);
+	}
+	break;
 	}
 }
 
@@ -1443,22 +1475,28 @@ LRESULT MainWindow::OnAiResponse(WPARAM wp, LPARAM lp)
 	{
 		std::wstring modeTag = m_pAiService->GetCurrentMode();
 
-		if (modeTag == L"text_shadowing") {
+		if (modeTag == L"text_shadowing")
+		{
 			ProcessPronunciationResult(*pMsg);
 		}
-		else if (modeTag == L"role_play") {
+		else if (modeTag == L"role_play")
+		{
 			ProcessRolePlayResponse(*pMsg);
 		}
-		else if (modeTag == L"sentence_pattern") {
+		else if (modeTag == L"sentence_pattern")
+		{
 			ProcessPatternResult(*pMsg);
 		}
-		else if (modeTag == L"free_conversation") {
+		else if (modeTag == L"free_conversation")
+		{
 			ProcessFreeConvResult(*pMsg);
 		}
-		else if (modeTag == L"pronunciation_correction") {
+		else if (modeTag == L"pronunciation_correction")
+		{
 			ProcessPronunciationCorrectionResult(*pMsg);
 		}
-		else {
+		else
+		{
 			// Default: general chat response
 			AppendChatMessage(L"AI", *pMsg);
 			m_pSpeechService->SpeakAsync(*pMsg, m_hwnd);
@@ -1486,8 +1524,12 @@ LRESULT MainWindow::OnSpeechComplete(WPARAM wp, LPARAM lp)
 	if (shouldListen)
 	{
 		// Start recognition only if not already running
-		if (m_pSpeechService && !m_pSpeechService->IsRecognizing()) {
-			m_pSpeechService->StartRecognition(m_hwnd);
+		if (m_pSpeechService && !m_pSpeechService->IsRecognizing())
+		{
+			if (!m_pSpeechService->StartRecognition(m_hwnd))
+			{
+				AppendToChatLog(L"⚠️ 语音识别启动失败，请检查 Windows 麦克风权限和语音识别组件。仍可在输入框输入文本后提交。");
+			}
 		}
 		m_practiceState = PracticeState::Responding;
 		UpdateModeButtons();

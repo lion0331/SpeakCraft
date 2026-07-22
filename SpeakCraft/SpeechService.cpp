@@ -10,10 +10,22 @@ SpeechService::~SpeechService()
 {
 	StopRecognition();
 	StopSpeaking();
-	if (m_pVoice)      { m_pVoice->Release(); m_pVoice = nullptr; }
-	if (m_pCurrentToken) { m_pCurrentToken->Release(); m_pCurrentToken = nullptr; }
-	if (m_pRecoContext) { m_pRecoContext->Release(); m_pRecoContext = nullptr; }
-	if (m_pRecognizer)  { m_pRecognizer->Release(); m_pRecognizer = nullptr; }
+	if (m_pVoice)
+	{
+		m_pVoice->Release(); m_pVoice = nullptr;
+	}
+	if (m_pCurrentToken)
+	{
+		m_pCurrentToken->Release(); m_pCurrentToken = nullptr;
+	}
+	if (m_pRecoContext)
+	{
+		m_pRecoContext->Release(); m_pRecoContext = nullptr;
+	}
+	if (m_pRecognizer)
+	{
+		m_pRecognizer->Release(); m_pRecognizer = nullptr;
+	}
 }
 
 bool SpeechService::Initialize()
@@ -89,30 +101,38 @@ bool SpeechService::IsSpeaking() const
 }
 
 
- // ─── Speech Recognition (STT) ─────────────────────
+// ─── Speech Recognition (STT) ─────────────────────
 
 bool SpeechService::StartRecognition(HWND hwndNotify)
 {
-	// ── Cooldown guard: prevent rapid-fire re-initialization ──
-	auto now = std::chrono::steady_clock::now();
-	auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastStartAttempt).count();
-	if (elapsed < 1000)
+	std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+	if (m_bRecognizing && m_pRecoContext)
 	{
-		OutputDebugStringW((L"[STT] Skipped — cooldown (" + std::to_wstring(elapsed) + L"ms)\n").c_str());
-		return m_bRecognizing;  // if already running, report success; else just skip
+		m_hwndRecoNotify = hwndNotify;
+		return true;
 	}
-	m_lastStartAttempt = now;
 
 	StopRecognition();
-	if (!m_initialized) { Initialize(); if (!m_initialized) return false; }
+	if (!m_initialized)
+	{
+		Initialize(); if (!m_initialized) return false;
+	}
 
 	HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-	bool bComInitHere = (hr == S_OK);
-	if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) { OutputDebugStringW(L"[STT] CoInit failed\n"); return false; }
+	m_bComInitialized = (hr == S_OK || hr == S_FALSE);
+	if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
+	{
+		OutputDebugStringW(L"[STT] CoInit failed\n"); return false;
+	}
 
-	// ── 1. Find recognizer token & detect language ──
+	auto fail = [&]() {
+		StopRecognition();
+		return false;
+		};
+
+	// Prefer an English recognizer, then fall back to the system default recognizer.
 	ISpObjectToken* pToken = nullptr;
-	bool bIsEnglish = true;
 	hr = SpFindBestToken(SPCAT_RECOGNIZERS, L"Language=409", nullptr, &pToken);  // en-US
 	if (FAILED(hr))
 	{
@@ -120,8 +140,7 @@ bool SpeechService::StartRecognition(HWND hwndNotify)
 	}
 	if (FAILED(hr) || !pToken)
 	{
-		bIsEnglish = false;
-		OutputDebugStringW(L"[STT] Non-English system — forcing Shared path\n");
+		OutputDebugStringW(L"[STT] English recognizer not found; using default recognizer\n");
 		hr = SpGetDefaultTokenFromCategoryId(SPCAT_RECOGNIZERS, &pToken);
 	}
 
@@ -129,146 +148,99 @@ bool SpeechService::StartRecognition(HWND hwndNotify)
 	if (SUCCEEDED(hr) && pToken)
 	{
 		LPWSTR pszId = nullptr;
-		if (SUCCEEDED(pToken->GetId(&pszId)) && pszId) { wcscpy_s(szLangName, pszId); CoTaskMemFree(pszId); }
+		if (SUCCEEDED(pToken->GetId(&pszId)) && pszId)
+		{
+			wcscpy_s(szLangName, pszId); CoTaskMemFree(pszId);
+		}
 		OutputDebugStringW((std::wstring(L"[STT] Token: ") + szLangName + L"\n").c_str());
 	}
-	if (FAILED(hr) || !pToken) { OutputDebugStringW(L"[STT] *** No recognizer ***\n"); if (bComInitHere) CoUninitialize(); return false; }
-
-	// ── 2. Choose path ──
-	//   English → InProc (private dictation engine)
-	//   Non-English → SpSharedRecoContext (taps into system SR session)
-	// InProc dictation with non-English engines (e.g. MS-2052-80-DESK) produces zero events.
-	m_bSharedRecognizer = !bIsEnglish;
-	m_pRecognizer = nullptr;
-	m_pRecoContext = nullptr;
-
-	if (!m_bSharedRecognizer)
+	if (FAILED(hr) || !pToken)
 	{
-		// ═══════════ InProc path (English only) ═══════════
-		hr = CoCreateInstance(CLSID_SpInprocRecognizer, nullptr, CLSCTX_ALL,
-			IID_ISpRecognizer, reinterpret_cast<void**>(&m_pRecognizer));
-		if (FAILED(hr) || !m_pRecognizer)
-		{
-			OutputDebugStringW(L"[STT] InProc creation failed → fallback Shared\n");
-			m_bSharedRecognizer = true;
-			pToken->Release();
-			hr = SpGetDefaultTokenFromCategoryId(SPCAT_RECOGNIZERS, &pToken);
-			if (FAILED(hr) || !pToken) { if (bComInitHere) CoUninitialize(); return false; }
-			goto shared_path;
-		}
-
-		OutputDebugStringW(L"[STT] InProc path\n");
-		hr = m_pRecognizer->SetRecognizer(pToken);
-		pToken->Release();
-		OutputDebugStringW((L"[STT] SetRecognizer → " + std::to_wstring(hr) + L"\n").c_str());
-		if (FAILED(hr)) { if (bComInitHere) CoUninitialize(); StopRecognition(); return false; }
-
-		ISpObjectToken* pMicToken = nullptr;
-		if (SUCCEEDED(SpGetDefaultTokenFromCategoryId(SPCAT_AUDIOIN, &pMicToken)) && pMicToken)
-		{
-			hr = m_pRecognizer->SetInput(pMicToken, TRUE);
-			pMicToken->Release();
-		}
-		OutputDebugStringW((L"[STT] SetInput → " + std::to_wstring(hr) + L"\n").c_str());
-		if (FAILED(hr)) { if (bComInitHere) CoUninitialize(); StopRecognition(); return false; }
-
-		hr = m_pRecognizer->CreateRecoContext(&m_pRecoContext);
-		OutputDebugStringW((L"[STT] CreateRecoContext → " + std::to_wstring(hr) + L"\n").c_str());
-		if (FAILED(hr)) { if (bComInitHere) CoUninitialize(); StopRecognition(); return false; }
-
-		ISpRecoGrammar* pGrammar = nullptr;
-		if (SUCCEEDED(m_pRecoContext->CreateGrammar(0, &pGrammar)) && pGrammar)
-		{
-			HRESULT hrDict = pGrammar->LoadDictation(nullptr, SPLO_STATIC);
-			if (FAILED(hrDict)) hrDict = pGrammar->LoadDictation(nullptr, SPLO_DYNAMIC);
-			if (SUCCEEDED(hrDict)) pGrammar->SetDictationState(SPRS_ACTIVE);
-			pGrammar->Release();
-		}
-	}
-	else
-	{
-shared_path:
-		// ═══════════ Shared path (non-English or InProc fallback) ═══════════
-		OutputDebugStringW(L"[STT] Shared path (SpSharedRecoContext)\n");
-
-		// SpSharedRecoContext wraps system SR — no separate ISpRecognizer needed
-		hr = CoCreateInstance(CLSID_SpSharedRecoContext, nullptr, CLSCTX_ALL,
-			IID_ISpRecoContext, reinterpret_cast<void**>(&m_pRecoContext));
-		OutputDebugStringW((L"[STT] SpSharedRecoContext → " + std::to_wstring(hr) + L"\n").c_str());
-		if (FAILED(hr) || !m_pRecoContext) {
-			if (pToken) pToken->Release();
-			if (bComInitHere) CoUninitialize();
-			return false;
-		}
-
-		// Get internal recognizer for state control
-		hr = m_pRecoContext->GetRecognizer(&m_pRecognizer);
-		OutputDebugStringW((L"[STT] GetRecognizer → " + std::to_wstring(hr) + L"\n").c_str());
-
-		// Set the language on the internal recognizer
-		if (m_pRecognizer && pToken)
-		{
-			hr = m_pRecognizer->SetRecognizer(pToken);
-			OutputDebugStringW((L"[STT] Shared SetRecognizer → " + std::to_wstring(hr) + L"\n").c_str());
-		}
-		if (pToken) pToken->Release();
-
-		// Dictation grammar — this is what connects us to system SR session
-		ISpRecoGrammar* pGrammar = nullptr;
-		hr = m_pRecoContext->CreateGrammar(0, &pGrammar);
-		OutputDebugStringW((L"[STT] CreateGrammar → " + std::to_wstring(hr) + L"\n").c_str());
-		if (SUCCEEDED(hr) && pGrammar)
-		{
-			HRESULT hrDict = pGrammar->LoadDictation(nullptr, SPLO_STATIC);
-			if (FAILED(hrDict)) hrDict = pGrammar->LoadDictation(nullptr, SPLO_DYNAMIC);
-			OutputDebugStringW((L"[STT] LoadDictation → " + std::to_wstring(hrDict) + L"\n").c_str());
-			if (SUCCEEDED(hrDict))
-			{
-				HRESULT hrState = pGrammar->SetDictationState(SPRS_ACTIVE);
-				OutputDebugStringW((L"[STT] SetDictationState → " + std::to_wstring(hrState) + L"\n").c_str());
-			}
-			pGrammar->Release();
-		}
-
-		// Hide SR floating bar
-		Sleep(300);
-		HWND hSrBar = FindWindowW(L"Speech Recognition", nullptr);
-		if (!hSrBar) hSrBar = FindWindowW(L"语音识别", nullptr);
-		if (hSrBar) { ShowWindow(hSrBar, SW_HIDE); OutputDebugStringW(L"[STT] SR bar hidden\n"); }
+		OutputDebugStringW(L"[STT] *** No recognizer ***\n");
+		return fail();
 	}
 
-	// ── 3. Common setup ──
+	hr = CoCreateInstance(CLSID_SpInprocRecognizer, nullptr, CLSCTX_ALL,
+		IID_ISpRecognizer, reinterpret_cast<void**>(&m_pRecognizer));
+	OutputDebugStringW((L"[STT] SpInprocRecognizer → " + std::to_wstring(hr) + L"\n").c_str());
+	if (FAILED(hr) || !m_pRecognizer)
+	{
+		pToken->Release(); return fail();
+	}
+
+	hr = m_pRecognizer->SetRecognizer(pToken);
+	pToken->Release();
+	OutputDebugStringW((L"[STT] SetRecognizer → " + std::to_wstring(hr) + L"\n").c_str());
+	if (FAILED(hr)) return fail();
+
+	IUnknown* pAudio = nullptr;
+	hr = SpCreateDefaultObjectFromCategoryId(SPCAT_AUDIOIN, &pAudio);
+	OutputDebugStringW((L"[STT] Default audio input → " + std::to_wstring(hr) + L"\n").c_str());
+	if (FAILED(hr) || !pAudio) return fail();
+
+	hr = m_pRecognizer->SetInput(pAudio, TRUE);
+	pAudio->Release();
+	OutputDebugStringW((L"[STT] SetInput → " + std::to_wstring(hr) + L"\n").c_str());
+	if (FAILED(hr)) return fail();
+
+	hr = m_pRecognizer->CreateRecoContext(&m_pRecoContext);
+	OutputDebugStringW((L"[STT] CreateRecoContext → " + std::to_wstring(hr) + L"\n").c_str());
+	if (FAILED(hr) || !m_pRecoContext) return fail();
+
 	m_hwndRecoNotify = hwndNotify;
 	hr = m_pRecoContext->SetNotifyWindowMessage(hwndNotify, WM_USER_STT_EVENT, 0, 0);
 	OutputDebugStringW((L"[STT] SetNotifyWindow → " + std::to_wstring(hr) + L"\n").c_str());
-	if (FAILED(hr)) { if (bComInitHere) CoUninitialize(); StopRecognition(); return false; }
+	if (FAILED(hr)) return fail();
 
 	const ULONGLONG interest =
 		SPFEI(SPEI_RECOGNITION) | SPFEI(SPEI_FALSE_RECOGNITION) |
 		SPFEI(SPEI_SOUND_START) | SPFEI(SPEI_SOUND_END) | SPFEI(SPEI_INTERFERENCE);
-	m_pRecoContext->SetInterest(interest, interest);
-	m_pRecoContext->SetContextState(SPCS_ENABLED);
+	hr = m_pRecoContext->SetInterest(interest, interest);
+	OutputDebugStringW((L"[STT] SetInterest → " + std::to_wstring(hr) + L"\n").c_str());
+	if (FAILED(hr)) return fail();
+
+	hr = m_pRecoContext->CreateGrammar(1, &m_pRecoGrammar);
+	OutputDebugStringW((L"[STT] CreateGrammar → " + std::to_wstring(hr) + L"\n").c_str());
+	if (FAILED(hr) || !m_pRecoGrammar) return fail();
+
+	hr = m_pRecoGrammar->LoadDictation(nullptr, SPLO_STATIC);
+	if (FAILED(hr)) hr = m_pRecoGrammar->LoadDictation(nullptr, SPLO_DYNAMIC);
+	OutputDebugStringW((L"[STT] LoadDictation → " + std::to_wstring(hr) + L"\n").c_str());
+	if (FAILED(hr)) return fail();
+
+	hr = m_pRecoGrammar->SetDictationState(SPRS_ACTIVE);
+	OutputDebugStringW((L"[STT] SetDictationState → " + std::to_wstring(hr) + L"\n").c_str());
+	if (FAILED(hr)) return fail();
+
+	hr = m_pRecoContext->SetContextState(SPCS_ENABLED);
+	OutputDebugStringW((L"[STT] SetContextState(ENABLED) → " + std::to_wstring(hr) + L"\n").c_str());
+	if (FAILED(hr)) return fail();
 
 	if (m_pRecognizer)
 	{
 		hr = m_pRecognizer->SetRecoState(SPRST_ACTIVE);
 		OutputDebugStringW((L"[STT] SetRecoState(ACTIVE) → " + std::to_wstring(hr) + L"\n").c_str());
+		if (FAILED(hr)) return fail();
 	}
 
 	m_recognizedText.clear();
 	m_bRecognizing = true;
-	m_bComInitialized = bComInitHere;
 
-	OutputDebugStringW((std::wstring(L"[STT] >>> READY (") +
-		(m_bSharedRecognizer ? L"Shared" : L"InProc") +
-		L") — speak now <<<\n").c_str());
+	OutputDebugStringW(L"[STT] >>> READY (InProc dictation) — speak now <<<\n");
 	return true;
 }
 
 void SpeechService::StopRecognition()
 {
-	if (!m_bRecognizing) return;
+	std::lock_guard<std::recursive_mutex> lock(m_mutex);
 	m_bRecognizing = false;
+
+	if (m_pRecoGrammar)
+	{
+		m_pRecoGrammar->SetDictationState(SPRS_INACTIVE);
+		m_pRecoGrammar->Release();
+		m_pRecoGrammar = nullptr;
+	}
 
 	if (m_pRecoContext)
 	{
