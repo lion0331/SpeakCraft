@@ -30,6 +30,14 @@
 #define IDC_STATUS_BAR          1108
 #define IDC_SPLITTER            1109
 
+// Mode buttons (6)
+#define IDC_MODE_BTN_0          1110    // Text Shadowing
+#define IDC_MODE_BTN_1          1111    // Role Play
+#define IDC_MODE_BTN_2          1112    // Sentence Pattern
+#define IDC_MODE_BTN_3          1113    // Free Conversation
+#define IDC_MODE_BTN_4          1114    // Grammar Correction
+#define IDC_MODE_BTN_5          1115    // Learning Report
+
 // Settings dialog
 #define IDC_API_ENDPOINT        1201
 #define IDC_API_KEY             1202

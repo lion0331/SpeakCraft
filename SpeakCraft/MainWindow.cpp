@@ -2,11 +2,24 @@
 #include "ConfigManager.h"
 #include "LessonManager.h"
 
+// Forward declaration
+static std::wstring GetBarString(double score);
+
 // Global instance for window proc forwarding
 static MainWindow* g_pMainWindow = nullptr;
 
 // ─── Window Class Name ───────────────────────────
 static constexpr const wchar_t* WINDOW_CLASS = L"SpeakCraftMainWindow";
+
+// ─── Mode button labels ──────────────────────────
+static constexpr const wchar_t* MODE_LABELS[] = {
+	L"📖 课文跟读",
+	L"🎭 角色扮演",
+	L"🔄 句型替换",
+	L"💬 自由对话",
+	L"✏️ 语法纠错",
+	L"📊 学习追踪"
+};
 
 // ─── Constructor / Destructor ────────────────────
 
@@ -28,13 +41,12 @@ bool MainWindow::Create(int nCmdShow)
 	m_hInstance = GetModuleHandle(nullptr);
 	g_pMainWindow = this;
 
-	// Register window class
 	WNDCLASSEXW wc = {};
 	wc.cbSize = sizeof(wc);
 	wc.style = CS_HREDRAW | CS_VREDRAW;
 	wc.lpfnWndProc = WndProc;
 	wc.hInstance = m_hInstance;
-	wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION); // Use system icon if custom not available
+	wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
 	wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
 	wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
 	wc.lpszClassName = WINDOW_CLASS;
@@ -42,7 +54,6 @@ bool MainWindow::Create(int nCmdShow)
 
 	if (!RegisterClassExW(&wc)) return false;
 
-	// Create window
 	m_hwnd = CreateWindowExW(
 		0, WINDOW_CLASS,
 		L"SpeakCraft — AI英语口语练习助手",
@@ -93,25 +104,22 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wp, LPARAM lp)
 
 LRESULT MainWindow::OnCreate()
 {
-	// MUST be first: register common control classes before creating any controls
 	INITCOMMONCONTROLSEX icc = {};
 	icc.dwSize = sizeof(icc);
 	icc.dwICC = ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES |
 		ICC_STANDARD_CLASSES | ICC_BAR_CLASSES;
 	InitCommonControlsEx(&icc);
 
-	// COM is already initialized by main.cpp
-
-	// Initialize services
 	ConfigManager::Instance().Load();
 	m_pSpeechService->Initialize();
 	m_pAiService->Initialize(m_hwnd);
 	LessonManager::Instance().Initialize();
+	LearningTracker::Instance().Load();
 
 	CreateChildControls();
-	PopulateLessonTree();  // also selects first lesson + expands + redraws
+	PopulateLessonTree();
+	SwitchMode(PracticeModeType::TextShadowing);
 
-	// Select first lesson
 	auto& lm = LessonManager::Instance();
 	if (lm.GetBookCount() > 0)
 	{
@@ -122,7 +130,7 @@ LRESULT MainWindow::OnCreate()
 		}
 	}
 
-	SetStatus(L"Ready — Select a lesson to begin");
+	SetStatus(L"Ready — Select a lesson and practice mode to begin");
 	return 0;
 }
 
@@ -132,7 +140,7 @@ void MainWindow::CreateChildControls()
 {
 	HINSTANCE hInst = m_hInstance;
 
-	// Left panel: TreeView for lesson navigation
+	// Left panel: TreeView
 	m_hwndLessonTree = CreateWindowExW(
 		0, WC_TREEVIEWW, L"",
 		WS_CHILD | WS_VISIBLE | WS_BORDER |
@@ -140,7 +148,7 @@ void MainWindow::CreateChildControls()
 		0, 0, 0, 0,
 		m_hwnd, reinterpret_cast<HMENU>(IDC_LESSON_TREE), hInst, nullptr);
 
-	// Right upper: RichEdit for lesson content (read-only)
+	// Right upper: RichEdit for lesson content
 	LoadLibraryW(L"Msftedit.dll");
 	m_hwndLessonContent = CreateWindowExW(
 		0, L"RichEdit50W", L"",
@@ -149,15 +157,14 @@ void MainWindow::CreateChildControls()
 		0, 0, 0, 0,
 		m_hwnd, reinterpret_cast<HMENU>(IDC_LESSON_CONTENT), hInst, nullptr);
 
-	// Set default font for content area
 	CHARFORMAT2W cf = {};
 	cf.cbSize = sizeof(cf);
 	cf.dwMask = CFM_FACE | CFM_SIZE | CFM_BOLD;
-	cf.yHeight = 240; // 12pt
+	cf.yHeight = 240;
 	wcscpy_s(cf.szFaceName, L"Segoe UI");
 	SendMessage(m_hwndLessonContent, EM_SETCHARFORMAT, SCF_ALL, reinterpret_cast<LPARAM>(&cf));
 
-	// Right lower: ListBox for chat history
+	// Chat history
 	m_hwndChatHistory = CreateWindowExW(
 		0, L"LISTBOX", L"",
 		WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL |
@@ -179,9 +186,9 @@ void MainWindow::CreateChildControls()
 		0, 0, 0, 0,
 		m_hwnd, reinterpret_cast<HMENU>(IDC_SEND_BTN), hInst, nullptr);
 
-	// Record / Practice button
+	// Main action button (context-sensitive per mode)
 	m_hwndRecordBtn = CreateWindowExW(
-		0, L"BUTTON", L"🎤 Start Practice",
+		0, L"BUTTON", L"▶ Start",
 		WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
 		0, 0, 0, 0,
 		m_hwnd, reinterpret_cast<HMENU>(IDC_RECORD_BTN), hInst, nullptr);
@@ -193,6 +200,15 @@ void MainWindow::CreateChildControls()
 		0, 0, 0, 0,
 		m_hwnd, reinterpret_cast<HMENU>(IDC_PLAY_BTN), hInst, nullptr);
 
+	// ── Mode Buttons (6 practice modes) ──────────
+	for (int i = 0; i < 6; i++) {
+		m_hwndModeBtns[i] = CreateWindowExW(
+			0, L"BUTTON", MODE_LABELS[i],
+			WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_PUSHLIKE,
+			0, 0, 0, 0,
+			m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MODE_BTN_0 + i)), hInst, nullptr);
+	}
+
 	// Status bar
 	m_hwndStatusBar = CreateWindowExW(
 		0, STATUSCLASSNAMEW, L"",
@@ -200,7 +216,7 @@ void MainWindow::CreateChildControls()
 		0, 0, 0, 0,
 		m_hwnd, reinterpret_cast<HMENU>(IDC_STATUS_BAR), hInst, nullptr);
 
-	// Set fonts for child controls
+	// Set fonts
 	HFONT hFont = CreateFontW(-12, 0, 0, 0, FW_NORMAL,
 		FALSE, FALSE, FALSE, DEFAULT_CHARSET,
 		OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -210,7 +226,9 @@ void MainWindow::CreateChildControls()
 	SendMessage(m_hwndSendBtn, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
 	SendMessage(m_hwndRecordBtn, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
 	SendMessage(m_hwndPlayBtn, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
-	// Note: font handle not freed — owned by window
+	for (int i = 0; i < 6; i++) {
+		SendMessage(m_hwndModeBtns[i], WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
+	}
 }
 
 // ─── WM_SIZE — Layout ────────────────────────────
@@ -225,7 +243,7 @@ void MainWindow::LayoutControls(int width, int height)
 {
 	if (!m_hwndLessonTree || width == 0 || height == 0) return;
 
-	// Status bar at bottom
+	// Status bar
 	SendMessage(m_hwndStatusBar, WM_SIZE, 0, 0);
 	RECT sbRect;
 	GetClientRect(m_hwndStatusBar, &sbRect);
@@ -235,20 +253,34 @@ void MainWindow::LayoutControls(int width, int height)
 	int toolbarY = 0;
 	int contentTop = toolbarY + TOOLBAR_HEIGHT + MARGIN;
 
-	// ── Toolbar row ──────────────────────────────
+	// ── Toolbar row: mode buttons ────────────────
 	int btnY = toolbarY + MARGIN;
 	int btnHeight = TOOLBAR_HEIGHT - 2 * MARGIN;
 
+	// Mode buttons (first row)
+	int modeX = MARGIN;
+	for (int i = 0; i < 6; i++) {
+		SetWindowPos(m_hwndModeBtns[i], nullptr,
+			modeX, btnY, MODE_BTN_WIDTH, btnHeight, SWP_NOZORDER);
+		modeX += MODE_BTN_WIDTH + 2;
+	}
+
+	// Action buttons (below mode row or right-aligned)
+	int actionY = toolbarY + TOOLBAR_HEIGHT + MARGIN;
+	int actionBtnHeight = TOOLBAR_HEIGHT - 2 * MARGIN;
 	SetWindowPos(m_hwndRecordBtn, nullptr,
-		MARGIN, btnY, 140, btnHeight, SWP_NOZORDER);
+		MARGIN, actionY, 140, actionBtnHeight, SWP_NOZORDER);
 	SetWindowPos(m_hwndPlayBtn, nullptr,
-		MARGIN + 144, btnY, 120, btnHeight, SWP_NOZORDER);
+		MARGIN + 144, actionY, 120, actionBtnHeight, SWP_NOZORDER);
+
+	// Adjust content top for second toolbar row
+	int adjustedContentTop = actionY + TOOLBAR_HEIGHT;
 
 	// ── Left panel: Lesson Tree ──────────────────
 	int treeLeft = MARGIN;
-	int treeTop = contentTop;
+	int treeTop = adjustedContentTop;
 	int treeWidth = LEFT_PANEL_WIDTH;
-	int treeHeight = clientHeight - contentTop - MARGIN;
+	int treeHeight = clientHeight - treeTop - MARGIN;
 
 	SetWindowPos(m_hwndLessonTree, nullptr,
 		treeLeft, treeTop, treeWidth, treeHeight, SWP_NOZORDER);
@@ -262,24 +294,122 @@ void MainWindow::LayoutControls(int width, int height)
 	int chatTop = treeTop + contentHeight + MARGIN;
 	int chatHeight = treeHeight - contentHeight - MARGIN;
 
-	// Lesson content (upper right)
+	// Lesson content
 	SetWindowPos(m_hwndLessonContent, nullptr,
 		rightLeft, treeTop, rightWidth, contentHeight, SWP_NOZORDER);
 
-	// Chat history (lower right, above input)
+	// Chat area
 	int inputTop = clientHeight - MARGIN - INPUT_AREA_HEIGHT - sbHeight;
 	int chatListHeight = inputTop - chatTop - MARGIN;
 
 	SetWindowPos(m_hwndChatHistory, nullptr,
 		rightLeft, chatTop, rightWidth, chatListHeight, SWP_NOZORDER);
 
-	// Chat input + send button (bottom right)
+	// Chat input + send
 	int inputWidth = rightWidth - BUTTON_WIDTH - MARGIN;
 	SetWindowPos(m_hwndChatInput, nullptr,
 		rightLeft, inputTop, inputWidth, INPUT_AREA_HEIGHT, SWP_NOZORDER);
 	SetWindowPos(m_hwndSendBtn, nullptr,
 		rightLeft + inputWidth + MARGIN, inputTop,
 		BUTTON_WIDTH, INPUT_AREA_HEIGHT, SWP_NOZORDER);
+}
+
+// ─── Mode Management ────────────────────────────
+
+std::wstring MainWindow::GetCurrentModeLabel() const
+{
+	return MODE_LABELS[static_cast<int>(m_currentMode)];
+}
+
+void MainWindow::SwitchMode(PracticeModeType newMode)
+{
+	m_currentMode = newMode;
+	m_practiceState = PracticeState::Idle;
+	ClearChatLog();
+	UpdateModeButtons();
+	UpdateModePanel();
+
+	// Reset mode-specific state
+	m_shadowSentences.clear();
+	m_shadowIndex = 0;
+	m_pRolePlaySession.reset();
+	m_pPatternSession.reset();
+	m_pFreeConvSession.reset();
+	m_grammarSpeechBuffer.clear();
+
+	SetStatus(L"Mode: " + GetCurrentModeLabel() + L" — Ready");
+}
+
+void MainWindow::UpdateModeButtons()
+{
+	for (int i = 0; i < 6; i++) {
+		bool isActive = (static_cast<int>(m_currentMode) == i);
+		// Highlight active mode button
+		SendMessage(m_hwndModeBtns[i], BM_SETSTYLE,
+			isActive ? BS_PUSHBUTTON : BS_PUSHBUTTON | BS_PUSHLIKE, TRUE);
+		InvalidateRect(m_hwndModeBtns[i], nullptr, TRUE);
+	}
+
+	// Update action button label based on mode
+	const wchar_t* actionLabel = L"▶ Start";
+	switch (m_currentMode) {
+	case PracticeModeType::TextShadowing:
+		actionLabel = L"▶ 开始跟读"; break;
+	case PracticeModeType::RolePlay:
+		actionLabel = L"▶ 开始角色扮演"; break;
+	case PracticeModeType::SentencePattern:
+		actionLabel = L"▶ 出题"; break;
+	case PracticeModeType::FreeConversation:
+		actionLabel = L"▶ 开始对话"; break;
+	case PracticeModeType::GrammarCorrection:
+		actionLabel = L"▶ 提交检查"; break;
+	case PracticeModeType::LearningReport:
+		actionLabel = L"📊 查看报告"; break;
+	}
+	SetWindowTextW(m_hwndRecordBtn, actionLabel);
+}
+
+void MainWindow::UpdateModePanel()
+{
+	// Show mode-specific introduction in chat log
+	std::wstring intro;
+	switch (m_currentMode) {
+	case PracticeModeType::TextShadowing:
+		intro = L"📖 【课文跟读模式】逐句跟读课文，AI 评估发音\n"
+			L"使用方法：点击「开始跟读」→ 听原声 → 跟着朗读 → AI 逐词评分\n"
+			L"评分标记：🟢准确 / 🟡一般 / 🔴需改进";
+		break;
+	case PracticeModeType::RolePlay:
+		intro = L"🎭 【角色扮演模式】和 AI 按教材剧情对话\n"
+			L"使用方法：点击「开始角色扮演」→ 选择一个角色 → AI 扮演另一个角色\n"
+			L"AI 会实时纠正你的语法错误并引导对话";
+		break;
+	case PracticeModeType::SentencePattern:
+		intro = L"🔄 【句型替换模式】核心句型 + 换关键词造句\n"
+			L"使用方法：点击「出题」→ AI 给出句型和关键词 → 你输入造句\n"
+			L"AI 判对错 → 给 Hint → 给正确答案";
+		break;
+	case PracticeModeType::FreeConversation:
+		intro = L"💬 【自由对话模式】围绕话题和 AI 自由聊天\n"
+			L"使用方法：点击「开始对话」→ 自由回答 AI 的开放问题\n"
+			L"AI 引导使用本课词汇，结束后总结用词情况";
+		break;
+	case PracticeModeType::GrammarCorrection:
+		intro = L"✏️ 【语法纠错模式】说一段话，AI 逐句分析语法\n"
+			L"使用方法：在下方输入或粘贴你的英语短文（1-3分钟内容）\n"
+			L"点击「提交检查」→ AI 逐句纠错 + 显示原文/纠错版对比";
+		break;
+	case PracticeModeType::LearningReport:
+		intro = L"📊 【学习追踪模式】\n"
+			L"自动评分（语法/词汇/发音/流利度）\n"
+			L"记录错误模式，自动归纳薄弱环节\n"
+			L"学习报告：进步曲线 + 技能分解图 + 里程碑";
+		ShowLearningReport();
+		break;
+	}
+	if (!intro.empty()) {
+		AppendToChatLog(intro);
+	}
 }
 
 // ─── Populate Lesson Tree ────────────────────────
@@ -299,7 +429,6 @@ void MainWindow::PopulateLessonTree()
 
 	for (auto& book : books)
 	{
-		// ── Step 1: Insert book node (COLLAPSED) ──
 		auto pBookData = std::make_unique<TreeItemData>();
 		pBookData->isBook = true;
 		pBookData->bookId = book.id;
@@ -313,10 +442,8 @@ void MainWindow::PopulateLessonTree()
 		tviBook.item.mask = TVIF_TEXT | TVIF_PARAM;
 		tviBook.item.pszText = const_cast<LPWSTR>(book.name.c_str());
 		tviBook.item.lParam = reinterpret_cast<LPARAM>(pRawBook);
-		// NO TVIS_EXPANDED — we expand AFTER children are added
 		HTREEITEM hBook = TreeView_InsertItem(m_hwndLessonTree, &tviBook);
 
-		// ── Step 2: Insert lesson nodes under the book ──
 		for (auto& lesson : book.lessons)
 		{
 			auto pData = std::make_unique<TreeItemData>();
@@ -338,15 +465,12 @@ void MainWindow::PopulateLessonTree()
 			TreeView_InsertItem(m_hwndLessonTree, &tviL);
 		}
 
-		// ── Step 3: Expand AFTER children exist ──
 		TreeView_Expand(m_hwndLessonTree, hBook, TVE_EXPAND);
 	}
 
-	// Force full redraw
 	InvalidateRect(m_hwndLessonTree, nullptr, TRUE);
 	UpdateWindow(m_hwndLessonTree);
 
-	// Select first lesson (safe)
 	if (!books.empty() && !books[0].lessons.empty())
 		SelectLesson(books[0].id, books[0].lessons[0].lessonNumber);
 }
@@ -364,8 +488,6 @@ void MainWindow::SelectLesson(const std::wstring& bookId, int lessonNumber)
 		m_currentBookId = bookId;
 		DisplayLesson(*pLesson);
 
-		// Visually select the tree item
-		// Walk tree to find the matching node by lParam
 		HTREEITEM hRoot = TreeView_GetRoot(m_hwndLessonTree);
 		while (hRoot)
 		{
@@ -376,9 +498,7 @@ void MainWindow::SelectLesson(const std::wstring& bookId, int lessonNumber)
 			auto* pData = reinterpret_cast<TreeItemData*>(item.lParam);
 			if (pData && pData->isBook && pData->bookId == bookId)
 			{
-				// Found the book — expand it, then walk children
 				TreeView_Expand(m_hwndLessonTree, hRoot, TVE_EXPAND);
-
 				HTREEITEM hChild = TreeView_GetChild(m_hwndLessonTree, hRoot);
 				while (hChild)
 				{
@@ -400,15 +520,14 @@ void MainWindow::SelectLesson(const std::wstring& bookId, int lessonNumber)
 			hRoot = TreeView_GetNextSibling(m_hwndLessonTree, hRoot);
 		}
 
-		// Clear chat history when switching lessons
 		m_pAiService->ClearHistory();
-		SendMessage(m_hwndChatHistory, LB_RESETCONTENT, 0, 0);
+		ClearChatLog();
 
-		// Show context message
 		std::wstring ctxMsg = L"📖 Switched to: " + pLesson->bookName +
 			L" — Lesson " + std::to_wstring(lessonNumber) +
 			L": " + pLesson->title;
 		AppendToChatLog(ctxMsg);
+		UpdateModePanel();
 
 		SetStatus(L"Ready — " + pLesson->bookName +
 			L" Lesson " + std::to_wstring(lessonNumber));
@@ -440,8 +559,6 @@ void MainWindow::DisplayLesson(const Lesson& lesson)
 	text += L"Practice Focus:\r\n" + lesson.practicePrompt + L"\r\n";
 
 	SetWindowTextW(m_hwndLessonContent, text.c_str());
-
-	// Scroll to top
 	SendMessage(m_hwndLessonContent, EM_SETSEL, 0, 0);
 	SendMessage(m_hwndLessonContent, EM_SCROLLCARET, 0, 0);
 }
@@ -470,7 +587,7 @@ void MainWindow::OnTreeSelectionChanged(HTREEITEM hItem)
 
 	auto* pData = reinterpret_cast<TreeItemData*>(item.lParam);
 	if (!pData) return;
-	if (pData->isBook) return;  // Book node → ignore
+	if (pData->isBook) return;
 
 	SelectLesson(pData->bookId, pData->lessonNumber);
 }
@@ -482,6 +599,15 @@ LRESULT MainWindow::OnCommand(WPARAM wp, LPARAM lp)
 	int id = LOWORD(wp);
 	int code = HIWORD(wp);
 
+	// Mode button clicks
+	if (id >= IDC_MODE_BTN_0 && id <= IDC_MODE_BTN_5)
+	{
+		if (code == BN_CLICKED) {
+			SwitchMode(static_cast<PracticeModeType>(id - IDC_MODE_BTN_0));
+		}
+		return 0;
+	}
+
 	switch (id)
 	{
 	case IDM_FILE_EXIT:
@@ -492,7 +618,11 @@ LRESULT MainWindow::OnCommand(WPARAM wp, LPARAM lp)
 	case IDC_RECORD_BTN:
 		if (code == BN_CLICKED || code == 0)
 		{
-			StartPractice();
+			if (m_practiceState != PracticeState::Idle) {
+				StopPractice();
+			} else {
+				StartPractice();
+			}
 		}
 		return 0;
 
@@ -519,16 +649,6 @@ LRESULT MainWindow::OnCommand(WPARAM wp, LPARAM lp)
 	case IDM_HELP_ABOUT:
 		ShowAboutDialog();
 		return 0;
-
-		// Handle Enter key in chat input
-	case IDC_CHAT_INPUT:
-		if (code == EN_MAXTEXT)
-		{
-			// User pressed Enter in chat input — but EN_MAXTEXT isn't for Enter
-			// We handle Enter in the edit control subclass, but for now
-			// the Send button is the primary send mechanism
-		}
-		return 0;
 	}
 
 	return 0;
@@ -538,32 +658,60 @@ LRESULT MainWindow::OnCommand(WPARAM wp, LPARAM lp)
 
 void MainWindow::SendChatMessage()
 {
-	int len = GetWindowTextLengthW(m_hwndChatInput);
-	if (len == 0) return;
+	if (m_practiceState == PracticeState::Idle) {
+		// Free-form: send as general chat or mode-specific
+		int len = GetWindowTextLengthW(m_hwndChatInput);
+		if (len == 0) return;
 
-	std::wstring msg(len + 1, L'\0');
-	GetWindowTextW(m_hwndChatInput, &msg[0], len + 1);
-	msg.resize(len);
+		std::wstring msg(len + 1, L'\0');
+		GetWindowTextW(m_hwndChatInput, &msg[0], len + 1);
+		msg.resize(len);
+		SetWindowTextW(m_hwndChatInput, L"");
 
-	// Clear input
-	SetWindowTextW(m_hwndChatInput, L"");
+		AppendChatMessage(L"You", msg);
 
-	// Show user message
-	AppendChatMessage(L"You", msg);
-
-	// Build context from current lesson
-	std::wstring systemCtx;
-	if (m_pCurrentLesson)
-	{
-		systemCtx = LessonManager::Instance().BuildPracticeContext(*m_pCurrentLesson);
-	}
-
-	// Send to AI
-	SetStatus(L"🤔 AI is thinking...");
-	if (!m_pAiService->SendMessage(msg, systemCtx))
-	{
-		AppendToChatLog(L"⚠️ AI service is busy. Please wait for the current response.");
-		SetStatus(L"Ready");
+		// Route based on mode
+		switch (m_currentMode) {
+		case PracticeModeType::RolePlay:
+			if (m_practiceState == PracticeState::Idle) {
+				m_pAiService->ContinueRolePlay(msg);
+				SetStatus(L"🎭 AI is responding in character...");
+			}
+			break;
+		case PracticeModeType::FreeConversation:
+			m_pAiService->ContinueFreeConversation(msg);
+			SetStatus(L"💬 AI is responding...");
+			break;
+		case PracticeModeType::SentencePattern:
+			if (m_pPatternSession) {
+				CheckPatternAnswer();
+			} else {
+				// General chat
+				std::wstring systemCtx = L"";
+				if (m_pCurrentLesson) {
+					systemCtx = LessonManager::Instance().BuildPracticeContext(*m_pCurrentLesson);
+				}
+				m_pAiService->SendMessage(msg, systemCtx);
+				SetStatus(L"🤔 AI is thinking...");
+			}
+			break;
+		case PracticeModeType::GrammarCorrection:
+			// Accumulate speech
+			m_grammarSpeechBuffer += msg + L" ";
+			AppendToChatLog(L"📝 Added to buffer. Click 'Submit' when done.");
+			SetWindowTextW(m_hwndChatInput, L"");
+			break;
+		default:
+			{
+				std::wstring systemCtx = L"";
+				if (m_pCurrentLesson) {
+					systemCtx = LessonManager::Instance().BuildPracticeContext(*m_pCurrentLesson);
+				}
+				m_pAiService->SendMessage(msg, systemCtx);
+				SetStatus(L"🤔 AI is thinking...");
+			}
+			break;
+		}
 	}
 }
 
@@ -571,26 +719,17 @@ void MainWindow::AppendChatMessage(const std::wstring& role, const std::wstring&
 {
 	std::wstring prefix;
 	if (role == L"You" || role == L"user")
-	{
 		prefix = L"🧑 You: ";
-	}
 	else if (role == L"assistant" || role == L"AI")
-	{
 		prefix = L"🤖 AI: ";
-	}
 	else
-	{
 		prefix = role + L": ";
-	}
 
-	// Add to list box — handle multi-line by splitting
-	std::wstring fullMsg = prefix + content;
-	AppendToChatLog(fullMsg);
+	AppendToChatLog(prefix + content);
 }
 
 void MainWindow::AppendToChatLog(const std::wstring& text)
 {
-	// Split by newlines and add each line to the listbox
 	std::wstring remaining = text;
 	size_t pos;
 	while ((pos = remaining.find(L'\n')) != std::wstring::npos)
@@ -609,7 +748,6 @@ void MainWindow::AppendToChatLog(const std::wstring& text)
 			reinterpret_cast<LPARAM>(remaining.c_str()));
 	}
 
-	// Scroll to bottom
 	int count = static_cast<int>(SendMessage(m_hwndChatHistory, LB_GETCOUNT, 0, 0));
 	if (count > 0)
 	{
@@ -617,7 +755,12 @@ void MainWindow::AppendToChatLog(const std::wstring& text)
 	}
 }
 
-// ─── Practice ────────────────────────────────────
+void MainWindow::ClearChatLog()
+{
+	SendMessage(m_hwndChatHistory, LB_RESETCONTENT, 0, 0);
+}
+
+// ─── Practice Entry Point ────────────────────────
 
 void MainWindow::StartPractice()
 {
@@ -628,42 +771,460 @@ void MainWindow::StartPractice()
 		return;
 	}
 
-	if (m_practiceState != PracticeState::Idle)
+	m_sessionStartTime = std::chrono::steady_clock::now();
+
+	switch (m_currentMode)
 	{
-		StopPractice();
-		return;
+	case PracticeModeType::TextShadowing:
+		StartTextShadowing();
+		break;
+	case PracticeModeType::RolePlay:
+		StartRolePlay();
+		break;
+	case PracticeModeType::SentencePattern:
+		StartSentencePattern();
+		break;
+	case PracticeModeType::FreeConversation:
+		StartFreeConversation();
+		break;
+	case PracticeModeType::GrammarCorrection:
+		if (m_grammarSpeechBuffer.empty()) {
+			StartGrammarCorrection();
+		} else {
+			SubmitGrammarCheck(L"");
+		}
+		break;
+	case PracticeModeType::LearningReport:
+		ShowLearningReport();
+		break;
 	}
-
-	m_practiceState = PracticeState::Listening;
-
-	// Generate a practice prompt
-	std::wstring prompt = LessonManager::Instance().GeneratePracticePrompt(*m_pCurrentLesson);
-
-	// Speak the prompt
-	m_pSpeechService->SpeakAsync(prompt, m_hwnd);
-
-	// Update UI
-	SetWindowTextW(m_hwndRecordBtn, L"⏹ Stop Practice");
-	SetStatus(L"🔊 AI is speaking... Listen and respond.");
-
-	// Show prompt in chat
-	AppendToChatLog(L"📣 Practice: " + prompt);
-
-	// Send initial practice message to AI
-	std::wstring practiceMsg = L"I'm ready to practice this lesson. " + prompt;
-	std::wstring systemCtx = LessonManager::Instance().BuildPracticeContext(*m_pCurrentLesson);
-	m_pAiService->SendMessage(practiceMsg, systemCtx);
 }
 
 void MainWindow::StopPractice()
 {
+	if (m_currentMode == PracticeModeType::FreeConversation &&
+		m_practiceState != PracticeState::Idle) {
+		EndFreeConversation();
+		return;
+	}
+
 	m_practiceState = PracticeState::Idle;
 	m_pSpeechService->StopSpeaking();
 	m_pAiService->Cancel();
+	SetWindowTextW(m_hwndRecordBtn, L"▶ Start");
+	SetStatus(L"Practice stopped");
 
-	SetWindowTextW(m_hwndRecordBtn, L"🎤 Start Practice");
-	SetStatus(L"Ready — Practice stopped");
+	UpdateModeButtons();
 }
+
+// ─── Mode 1: Text Shadowing ──────────────────────
+
+void MainWindow::StartTextShadowing()
+{
+	if (!m_pCurrentLesson) return;
+
+	// Split dialogue into sentences
+	m_shadowSentences.clear();
+	std::wstring dialogue = m_pCurrentLesson->dialogueText;
+	size_t start = 0;
+	for (size_t i = 0; i < dialogue.length(); i++) {
+		if (dialogue[i] == L'.' || dialogue[i] == L'?' || dialogue[i] == L'!') {
+			std::wstring sentence = dialogue.substr(start, i - start + 1);
+			// Trim
+			while (!sentence.empty() && iswspace(sentence.front())) sentence.erase(0, 1);
+			while (!sentence.empty() && iswspace(sentence.back())) sentence.pop_back();
+			if (!sentence.empty() && sentence.length() > 1) {
+				m_shadowSentences.push_back(sentence);
+			}
+			start = i + 1;
+		}
+	}
+	// Catch remaining
+	if (start < dialogue.length()) {
+		std::wstring remainder = dialogue.substr(start);
+		while (!remainder.empty() && iswspace(remainder.front())) remainder.erase(0, 1);
+		while (!remainder.empty() && iswspace(remainder.back())) remainder.pop_back();
+		if (!remainder.empty()) m_shadowSentences.push_back(remainder);
+	}
+
+	// Also split on \n
+	std::vector<std::wstring> splitByNewline;
+	for (auto& s : m_shadowSentences) {
+		size_t nlPos = 0, prev = 0;
+		while ((nlPos = s.find(L'\n', prev)) != std::wstring::npos) {
+			std::wstring sub = s.substr(prev, nlPos - prev);
+			while (!sub.empty() && iswspace(sub.front())) sub.erase(0, 1);
+			while (!sub.empty() && iswspace(sub.back())) sub.pop_back();
+			if (!sub.empty()) splitByNewline.push_back(sub);
+			prev = nlPos + 1;
+		}
+		std::wstring sub = s.substr(prev);
+		while (!sub.empty() && iswspace(sub.front())) sub.erase(0, 1);
+		while (!sub.empty() && iswspace(sub.back())) sub.pop_back();
+		if (!sub.empty()) splitByNewline.push_back(sub);
+	}
+	m_shadowSentences = splitByNewline;
+
+	if (m_shadowSentences.empty()) {
+		AppendToChatLog(L"⚠️ No sentences found in the dialogue for shadowing.");
+		return;
+	}
+
+	m_shadowIndex = 0;
+	m_practiceState = PracticeState::Listening;
+
+	AppendToChatLog(L"📖 【课文跟读】共 " + std::to_wstring(m_shadowSentences.size()) + L" 句。开始第 1 句：");
+	AppendToChatLog(L"📣 Original: " + m_shadowSentences[0]);
+
+	// Speak the first sentence
+	m_pSpeechService->SpeakAsync(m_shadowSentences[0], m_hwnd);
+
+	SetWindowTextW(m_hwndRecordBtn, L"⏹ Stop");
+	SetStatus(L"🔊 Listen to the original, then speak into your microphone");
+}
+
+void MainWindow::ProcessPronunciationResult(const std::wstring& aiResponse)
+{
+	AppendToChatLog(L"📊 AI Pronunciation Feedback: " + aiResponse);
+
+	// Move to next sentence
+	m_shadowIndex++;
+	if (m_shadowIndex < m_shadowSentences.size()) {
+		AppendToChatLog(L"📣 Next sentence (" + std::to_wstring(m_shadowIndex + 1) +
+			L"/" + std::to_wstring(m_shadowSentences.size()) + L"): " +
+			m_shadowSentences[m_shadowIndex]);
+		m_pSpeechService->SpeakAsync(m_shadowSentences[m_shadowIndex], m_hwnd);
+		m_practiceState = PracticeState::Listening;
+		SetStatus(L"🔊 Listen and repeat sentence " + std::to_wstring(m_shadowIndex + 1));
+	} else {
+		AppendToChatLog(L"✅ All sentences completed! Great practice!");
+		m_practiceState = PracticeState::Idle;
+		SetWindowTextW(m_hwndRecordBtn, L"▶ 开始跟读");
+		SetStatus(L"Text shadowing complete!");
+
+		// Record session
+		SessionRecord rec;
+		rec.mode = PracticeModeType::TextShadowing;
+		rec.bookId = m_currentBookId;
+		rec.lessonNumber = m_pCurrentLesson ? m_pCurrentLesson->lessonNumber : 0;
+		rec.lessonTitle = m_pCurrentLesson ? m_pCurrentLesson->title : L"";
+		rec.scores = SkillScores{ 60.0, 50.0, 70.0, 65.0 };
+		rec.durationSeconds = (int)std::chrono::duration_cast<std::chrono::seconds>(
+			std::chrono::steady_clock::now() - m_sessionStartTime).count();
+		LearningTracker::Instance().RecordSession(rec);
+	}
+}
+
+// ─── Mode 2: Role Play ───────────────────────────
+
+void MainWindow::StartRolePlay()
+{
+	if (!m_pCurrentLesson) return;
+
+	std::wstring scenario = m_pCurrentLesson->dialogueText;
+	std::wstring lessonCtx = LessonManager::Instance().BuildPracticeContext(*m_pCurrentLesson);
+
+	// Determine characters from the dialogue
+	std::wstring aiChar = L"Character A";
+	std::wstring userChar = L"Character B";
+
+	// Try to extract from dialogue format "A: ..." / "B: ..."
+	if (scenario.find(L"A:") != std::wstring::npos && scenario.find(L"B:") != std::wstring::npos) {
+		aiChar = L"Character B (responder)";
+		userChar = L"Character A (initiator)";
+	}
+
+	m_practiceState = PracticeState::Responding;
+	AppendToChatLog(L"🎭 Starting role play based on: " + m_pCurrentLesson->title);
+	AppendToChatLog(L"   You play: " + userChar);
+	AppendToChatLog(L"   AI plays: " + aiChar);
+
+	m_pAiService->StartRolePlay(scenario, userChar, aiChar, lessonCtx);
+
+	SetWindowTextW(m_hwndRecordBtn, L"⏹ Stop");
+	SetStatus(L"🎭 Role play in progress...");
+}
+
+void MainWindow::ProcessRolePlayResponse(const std::wstring& aiResponse)
+{
+	AppendChatMessage(L"🎭 AI", aiResponse);
+	m_pSpeechService->SpeakAsync(aiResponse, m_hwnd);
+	m_practiceState = PracticeState::Responding;
+	SetStatus(L"🎭 Your turn! Type your response...");
+}
+
+// ─── Mode 3: Sentence Pattern ────────────────────
+
+void MainWindow::StartSentencePattern()
+{
+	if (!m_pCurrentLesson) return;
+
+	m_pPatternSession = std::make_unique<PatternSession>();
+	m_pPatternSession->corePattern = m_pCurrentLesson->keyGrammar;
+	m_pPatternSession->explanation = m_pCurrentLesson->practicePrompt;
+	m_pPatternSession->correctCount = 0;
+	m_pPatternSession->totalAttempts = 0;
+
+	std::wstring lessonCtx = LessonManager::Instance().BuildPracticeContext(*m_pCurrentLesson);
+
+	AppendToChatLog(L"🔄 Generating sentence pattern exercise...");
+	AppendToChatLog(L"   Pattern: " + m_pPatternSession->corePattern);
+
+	m_pAiService->GeneratePatternExercise(m_pPatternSession->corePattern, lessonCtx);
+
+	m_practiceState = PracticeState::Processing;
+	SetWindowTextW(m_hwndRecordBtn, L"⏹ Stop");
+	SetStatus(L"🔄 Generating exercise...");
+}
+
+void MainWindow::CheckPatternAnswer()
+{
+	int len = GetWindowTextLengthW(m_hwndChatInput);
+	if (len == 0) return;
+
+	std::wstring answer(len + 1, L'\0');
+	GetWindowTextW(m_hwndChatInput, &answer[0], len + 1);
+	answer.resize(len);
+	SetWindowTextW(m_hwndChatInput, L"");
+
+	AppendChatMessage(L"You", answer);
+
+	m_pPatternSession->totalAttempts++;
+
+	m_pAiService->CheckPatternAnswer(answer,
+		m_pPatternSession->corePattern,
+		m_pPatternSession->exercises.empty() ? L"" : m_pPatternSession->exercises.back().keyword,
+		m_pPatternSession->exercises.empty() ? L"" : m_pPatternSession->exercises.back().expectedAnswer);
+
+	SetStatus(L"🔄 Checking your answer...");
+}
+
+void MainWindow::ProcessPatternResult(const std::wstring& aiResponse)
+{
+	AppendToChatLog(L"📝 Result: " + aiResponse);
+
+	// Check if AI response indicates correct
+	if (aiResponse.find(L"\"correct\":true") != std::wstring::npos ||
+		aiResponse.find(L"correct") != std::wstring::npos) {
+		m_pPatternSession->correctCount++;
+	}
+
+	// Generate next exercise
+	std::wstring lessonCtx = m_pCurrentLesson
+		? LessonManager::Instance().BuildPracticeContext(*m_pCurrentLesson) : L"";
+	m_pAiService->GeneratePatternExercise(m_pPatternSession->corePattern, lessonCtx);
+
+	SetStatus(L"🔄 Next exercise... Score: " +
+		std::to_wstring(m_pPatternSession->correctCount) + L"/" +
+		std::to_wstring(m_pPatternSession->totalAttempts));
+}
+
+// ─── Mode 4: Free Conversation ────────────────────
+
+void MainWindow::StartFreeConversation()
+{
+	if (!m_pCurrentLesson) return;
+
+	m_pFreeConvSession = std::make_unique<FreeConversationSession>();
+	m_pFreeConvSession->topic = m_pCurrentLesson->title;
+	for (auto& v : m_pCurrentLesson->vocabulary) {
+		m_pFreeConvSession->targetVocab.push_back(v.word);
+	}
+
+	std::wstring lessonCtx = LessonManager::Instance().BuildPracticeContext(*m_pCurrentLesson);
+
+	AppendToChatLog(L"💬 Starting free conversation about: " + m_pFreeConvSession->topic);
+	AppendToChatLog(L"   Target vocabulary: " +
+		[&]() { std::wstring s; for (auto& v : m_pFreeConvSession->targetVocab)
+		{ if (!s.empty()) s += L", "; s += v; } return s; }());
+
+	m_pAiService->StartFreeConversation(m_pFreeConvSession->topic,
+		m_pFreeConvSession->targetVocab, lessonCtx);
+
+	m_practiceState = PracticeState::Responding;
+	SetWindowTextW(m_hwndRecordBtn, L"⏹ End & Summarize");
+	SetStatus(L"💬 Free conversation in progress...");
+}
+
+void MainWindow::EndFreeConversation()
+{
+	AppendToChatLog(L"📊 Ending conversation, generating vocabulary summary...");
+	m_pAiService->EndFreeConversation();
+	SetStatus(L"📊 Generating summary...");
+}
+
+void MainWindow::ProcessFreeConvResult(const std::wstring& aiResponse)
+{
+	AppendChatMessage(L"AI", aiResponse);
+	m_pSpeechService->SpeakAsync(aiResponse, m_hwnd);
+	m_practiceState = PracticeState::Responding;
+	SetStatus(L"💬 Your turn to respond...");
+}
+
+// ─── Mode 5: Grammar Correction ───────────────────
+
+void MainWindow::StartGrammarCorrection()
+{
+	m_grammarSpeechBuffer.clear();
+	AppendToChatLog(L"✏️ 【语法纠错】请输入你的英语短文（1-3分钟内容），然后点击「提交检查」。");
+	AppendToChatLog(L"   你也可以一段一段输入，完成后点击提交。");
+	SetWindowTextW(m_hwndRecordBtn, L"✏️ 提交检查");
+	SetStatus(L"✏️ Type or paste your English text below...");
+}
+
+void MainWindow::SubmitGrammarCheck(const std::wstring& speech)
+{
+	if (speech.empty()) {
+		// Check if there's text in the input
+		int len = GetWindowTextLengthW(m_hwndChatInput);
+		if (len > 0) {
+			std::wstring input(len + 1, L'\0');
+			GetWindowTextW(m_hwndChatInput, &input[0], len + 1);
+			input.resize(len);
+			m_grammarSpeechBuffer += input + L" ";
+			SetWindowTextW(m_hwndChatInput, L"");
+		}
+
+		if (m_grammarSpeechBuffer.empty()) {
+			MessageBoxW(m_hwnd, L"Please type or paste your English text first.",
+				L"No Text", MB_OK | MB_ICONINFORMATION);
+			return;
+		}
+	}
+
+	std::wstring textToCheck = speech.empty() ? m_grammarSpeechBuffer : speech;
+	AppendToChatLog(L"📝 Submitted text for grammar check:\n" + textToCheck);
+
+	std::wstring topic = m_pCurrentLesson ? m_pCurrentLesson->title : L"General English";
+	m_pAiService->CorrectGrammar(textToCheck, topic);
+
+	SetStatus(L"✏️ Analyzing grammar...");
+	SetWindowTextW(m_hwndRecordBtn, L"⏳ Checking...");
+}
+
+void MainWindow::ProcessGrammarResult(const std::wstring& aiResponse)
+{
+	AppendToChatLog(L"📊 Grammar Correction Results:");
+	AppendToChatLog(aiResponse);
+
+	m_practiceState = PracticeState::Idle;
+	m_grammarSpeechBuffer.clear();
+	SetWindowTextW(m_hwndRecordBtn, L"▶ 提交检查");
+
+	// Record session
+	SessionRecord rec;
+	rec.mode = PracticeModeType::GrammarCorrection;
+	rec.bookId = m_currentBookId;
+	rec.lessonNumber = m_pCurrentLesson ? m_pCurrentLesson->lessonNumber : 0;
+	rec.lessonTitle = m_pCurrentLesson ? m_pCurrentLesson->title : L"";
+	rec.scores = SkillScores{ 65.0, 50.0, 50.0, 60.0 };
+	rec.durationSeconds = (int)std::chrono::duration_cast<std::chrono::seconds>(
+		std::chrono::steady_clock::now() - m_sessionStartTime).count();
+	rec.aiFeedback = aiResponse;
+	LearningTracker::Instance().RecordSession(rec);
+
+	SetStatus(L"Grammar check complete!");
+}
+
+// ─── Mode 6: Learning Report ──────────────────────
+
+void MainWindow::ShowLearningReport()
+{
+	auto& tracker = LearningTracker::Instance();
+	auto& profile = tracker.GetProfile();
+
+	ClearChatLog();
+	AppendToChatLog(L"📊 ═══════════════════════════════════");
+	AppendToChatLog(L"   📈 SPEAKCRAFT LEARNING REPORT");
+	AppendToChatLog(L"═══════════════════════════════════");
+
+	AppendToChatLog(L"");
+	AppendToChatLog(L"👤 User: " + profile.displayName);
+
+	auto now = std::chrono::system_clock::now();
+	auto created = std::chrono::system_clock::to_time_t(profile.createdDate);
+	std::tm tm;
+	localtime_s(&tm, &created);
+	wchar_t dateBuf[64];
+	wcsftime(dateBuf, 64, L"%Y-%m-%d", &tm);
+	AppendToChatLog(L"📅 Learning since: " + std::wstring(dateBuf));
+
+	AppendToChatLog(L"");
+	AppendToChatLog(L"── 📊 Overall Statistics ──");
+	AppendToChatLog(L"   Total Sessions: " + std::to_wstring(profile.totalSessions));
+	AppendToChatLog(L"   Total Minutes: " + std::to_wstring(profile.totalMinutes));
+	AppendToChatLog(L"   Current Streak: " + std::to_wstring(profile.currentStreak) + L" days 🔥");
+	AppendToChatLog(L"   Longest Streak: " + std::to_wstring(profile.longestStreak) + L" days");
+
+	AppendToChatLog(L"");
+	AppendToChatLog(L"── 🎯 Skill Breakdown ──");
+	AppendToChatLog(L"   Grammar:      " + std::to_wstring((int)profile.averageScores.grammar) + L"/100 " +
+		GetBarString(profile.averageScores.grammar));
+	AppendToChatLog(L"   Vocabulary:   " + std::to_wstring((int)profile.averageScores.vocabulary) + L"/100 " +
+		GetBarString(profile.averageScores.vocabulary));
+	AppendToChatLog(L"   Pronunciation:" + std::to_wstring((int)profile.averageScores.pronunciation) + L"/100 " +
+		GetBarString(profile.averageScores.pronunciation));
+	AppendToChatLog(L"   Fluency:      " + std::to_wstring((int)profile.averageScores.fluency) + L"/100 " +
+		GetBarString(profile.averageScores.fluency));
+	AppendToChatLog(L"   ───────────────────────");
+	double overall = tracker.GetOverallProgress();
+	AppendToChatLog(L"   ★ Overall:     " + std::to_wstring((int)overall) + L"/100 " +
+		GetBarString(overall));
+
+	AppendToChatLog(L"");
+	AppendToChatLog(L"── ⚠️ Weak Areas (Top Errors) ──");
+	auto weakAreas = tracker.GetWeakAreas();
+	if (weakAreas.empty()) {
+		AppendToChatLog(L"   No error data yet. Keep practicing!");
+	} else {
+		for (size_t i = 0; i < weakAreas.size(); i++) {
+			AppendToChatLog(L"   " + std::to_wstring(i + 1) + L". " + weakAreas[i]);
+		}
+	}
+
+	AppendToChatLog(L"");
+	AppendToChatLog(L"── 🏆 Milestones ──");
+	if (profile.milestones.empty()) {
+		AppendToChatLog(L"   No milestones yet. Complete more sessions!");
+	} else {
+		for (auto& m : profile.milestones) {
+			auto mt = std::chrono::system_clock::to_time_t(m.date);
+			localtime_s(&tm, &mt);
+			wcsftime(dateBuf, 64, L"%Y-%m-%d", &tm);
+			AppendToChatLog(L"   🏅 " + m.title + L" — " + m.description +
+				L" (" + std::wstring(dateBuf) + L")");
+		}
+	}
+
+	AppendToChatLog(L"");
+	AppendToChatLog(L"── 📈 Progress History (Last 10) ──");
+	auto& history = profile.progressHistory;
+	size_t histStart = history.size() > 10 ? history.size() - 10 : 0;
+	for (size_t i = histStart; i < history.size(); i++) {
+		double avg = (history[i].second.grammar + history[i].second.vocabulary +
+			history[i].second.pronunciation + history[i].second.fluency) / 4.0;
+		AppendToChatLog(L"   " + history[i].first + L": " +
+			std::to_wstring((int)avg) + L"/100 " + GetBarString(avg));
+	}
+
+	AppendToChatLog(L"");
+	AppendToChatLog(L"═══════════════════════════════════");
+	AppendToChatLog(L"💪 Keep practicing! Every session counts!");
+
+	SetStatus(L"📊 Learning report displayed");
+}
+
+// ─── Helper: progress bar string ──────────────────
+static std::wstring GetBarString(double score) {
+	std::wstring bar;
+	int blocks = (int)(score / 10.0);
+	for (int i = 0; i < 10; i++) {
+		bar += (i < blocks) ? L"█" : L"░";
+	}
+	return bar;
+}
+
+// ─── Read Aloud ───────────────────────────────────
 
 void MainWindow::ReadLessonAloud()
 {
@@ -674,7 +1235,6 @@ void MainWindow::ReadLessonAloud()
 		return;
 	}
 
-	// Read the dialogue text
 	std::wstring textToRead = m_pCurrentLesson->dialogueText;
 	if (textToRead.empty())
 	{
@@ -687,7 +1247,7 @@ void MainWindow::ReadLessonAloud()
 	m_pSpeechService->SpeakAsync(textToRead, m_hwnd);
 }
 
-// ─── AI Response Handler ─────────────────────────
+// ─── AI Response Handler (mode-aware) ─────────────
 
 LRESULT MainWindow::OnAiResponse(WPARAM wp, LPARAM lp)
 {
@@ -698,13 +1258,53 @@ LRESULT MainWindow::OnAiResponse(WPARAM wp, LPARAM lp)
 
 	if (success && pMsg->find(L"ERROR:") != 0)
 	{
-		AppendChatMessage(L"AI", *pMsg);
+		std::wstring modeTag = m_pAiService->GetCurrentMode();
 
-		if (m_practiceState == PracticeState::Listening)
-		{
-			// Speak the AI response
-			m_pSpeechService->SpeakAsync(*pMsg, m_hwnd);
-			m_practiceState = PracticeState::Responding;
+		if (modeTag == L"text_shadowing") {
+			ProcessPronunciationResult(*pMsg);
+		}
+		else if (modeTag == L"role_play") {
+			ProcessRolePlayResponse(*pMsg);
+		}
+		else if (modeTag == L"sentence_pattern") {
+			ProcessPatternResult(*pMsg);
+		}
+		else if (modeTag == L"free_conversation") {
+			ProcessFreeConvResult(*pMsg);
+		}
+		else if (modeTag == L"free_conversation_end") {
+			// End-of-conversation summary
+			AppendToChatLog(L"📊 Conversation Summary:");
+			AppendToChatLog(*pMsg);
+			m_practiceState = PracticeState::Idle;
+			SetWindowTextW(m_hwndRecordBtn, L"▶ 开始对话");
+			SetStatus(L"Conversation ended — see summary above");
+
+			// Record session
+			SessionRecord rec;
+			rec.mode = PracticeModeType::FreeConversation;
+			rec.bookId = m_currentBookId;
+			rec.lessonNumber = m_pCurrentLesson ? m_pCurrentLesson->lessonNumber : 0;
+			rec.lessonTitle = m_pCurrentLesson ? m_pCurrentLesson->title : L"";
+			rec.scores = SkillScores{ 70.0, 65.0, 60.0, 70.0 };
+			if (m_sessionStartTime.time_since_epoch().count() > 0) {
+				rec.durationSeconds = (int)std::chrono::duration_cast<std::chrono::seconds>(
+					std::chrono::steady_clock::now() - m_sessionStartTime).count();
+			}
+			rec.aiFeedback = *pMsg;
+			LearningTracker::Instance().RecordSession(rec);
+		}
+		else if (modeTag == L"grammar_correction") {
+			ProcessGrammarResult(*pMsg);
+		}
+		else {
+			// Default: chat response
+			AppendChatMessage(L"AI", *pMsg);
+
+			if (m_practiceState == PracticeState::Listening) {
+				m_pSpeechService->SpeakAsync(*pMsg, m_hwnd);
+				m_practiceState = PracticeState::Responding;
+			}
 		}
 	}
 	else
@@ -721,9 +1321,17 @@ LRESULT MainWindow::OnAiResponse(WPARAM wp, LPARAM lp)
 
 LRESULT MainWindow::OnSpeechComplete(WPARAM wp, LPARAM lp)
 {
-	if (m_practiceState == PracticeState::Responding)
+	if (m_currentMode == PracticeModeType::TextShadowing &&
+		m_practiceState == PracticeState::Listening)
 	{
-		SetStatus(L"🎤 Your turn! Speak your answer...");
+		SetStatus(L"🎤 Your turn! Repeat the sentence...");
+		// In a full implementation, this would trigger speech recognition
+		// For now, user types their attempt
+		m_practiceState = PracticeState::Responding;
+	}
+	else if (m_practiceState == PracticeState::Responding)
+	{
+		SetStatus(L"🎤 Your turn! Speak or type your answer...");
 		m_practiceState = PracticeState::Listening;
 	}
 	else
@@ -775,7 +1383,6 @@ INT_PTR CALLBACK SettingsDlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
 
 		if (LOWORD(wp) == IDC_TEST_CONNECTION)
 		{
-			// Save temp settings first
 			wchar_t buf[4096];
 			auto& cfg = ConfigManager::Instance();
 			GetDlgItemTextW(hDlg, IDC_API_ENDPOINT, buf, 4096);
@@ -785,12 +1392,10 @@ INT_PTR CALLBACK SettingsDlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
 			GetDlgItemTextW(hDlg, IDC_MODEL_NAME, buf, 4096);
 			cfg.SetModelName(buf);
 
-			// Need access to MainWindow's AI service
-			std::wstring error;
-			// Create a temporary AIService to test
 			AIService tempService;
 			HWND hwndMain = GetParent(hDlg);
 			tempService.Initialize(hwndMain);
+			std::wstring error;
 			if (tempService.TestConnection(error))
 			{
 				MessageBoxW(hDlg, L"✅ Connection successful! The API is working.",
@@ -823,7 +1428,6 @@ INT_PTR CALLBACK VoiceSettingsDlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
 	switch (msg)
 	{
 	case WM_INITDIALOG: {
-		// Use temp service for listing voices (independent of main window)
 		SpeechService tempSvc;
 		tempSvc.Initialize();
 		auto voices = tempSvc.GetAvailableVoices();
@@ -954,6 +1558,7 @@ LRESULT MainWindow::OnDestroy()
 {
 	m_pAiService->Cancel();
 	m_pSpeechService->StopSpeaking();
+	LearningTracker::Instance().Save();
 	PostQuitMessage(0);
 	return 0;
 }

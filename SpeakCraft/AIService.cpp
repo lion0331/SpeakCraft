@@ -65,18 +65,6 @@ bool AIService::SendMessage(const std::wstring& userMessage,
 	return true;
 }
 
-bool AIService::EvaluatePronunciation(const std::wstring& userSpeech,
-	const std::wstring& referenceText)
-{
-	if (m_processing.load()) return false;
-
-	std::wstring body = BuildEvalRequestBody(userSpeech, referenceText);
-	m_processing.store(true);
-	m_cancelled.store(false);
-
-	m_workerThread = std::make_unique<std::thread>(&AIService::ProcessRequest, this, body);
-	return true;
-}
 
 bool AIService::TestConnection(std::wstring& outError)
 {
@@ -409,4 +397,349 @@ std::wstring AIService::JsonEscape(const std::wstring& s)
 		}
 	}
 	return out;
+}
+
+// ─── 1. Text Shadowing — Pronunciation Evaluation ──
+
+bool AIService::EvaluatePronunciation(const std::wstring& userSpeech,
+	const std::wstring& referenceText)
+{
+	if (m_processing.load()) return false;
+	m_currentMode = L"text_shadowing";
+
+	std::wstring body = BuildEvalRequestBody(userSpeech, referenceText);
+	m_processing.store(true);
+	m_cancelled.store(false);
+	m_workerThread = std::make_unique<std::thread>(&AIService::ProcessRequest, this, body);
+	return true;
+}
+
+// ─── 2. Role Play ──────────────────────────────────
+
+bool AIService::StartRolePlay(const std::wstring& scenario,
+	const std::wstring& userCharacter,
+	const std::wstring& aiCharacter,
+	const std::wstring& lessonContext)
+{
+	if (m_processing.load()) return false;
+	m_currentMode = L"role_play";
+
+	std::wstring systemPrompt = L"You are an English conversation partner for role-play practice.\n\n";
+	systemPrompt += L"SCENARIO: " + scenario + L"\n";
+	systemPrompt += L"Your character: " + aiCharacter + L"\n";
+	systemPrompt += L"User's character: " + userCharacter + L"\n\n";
+	systemPrompt += L"RULES:\n";
+	systemPrompt += L"1. Stay in character at all times. Speak as " + aiCharacter + L".\n";
+	systemPrompt += L"2. If the user makes a grammar or pronunciation error, gently correct them by modeling the correct form in your next line.\n";
+	systemPrompt += L"3. Keep the conversation natural and engaging.\n";
+	systemPrompt += L"4. Guide the user to use vocabulary and grammar from the lesson.\n";
+	systemPrompt += L"5. Begin the dialogue with the first line as " + aiCharacter + L".\n\n";
+	systemPrompt += L"Lesson context:\n" + lessonContext;
+
+	std::wstring userMsg = L"I'm ready to start the role-play. I am " + userCharacter + L".";
+
+	std::wstring body = BuildRolePlayRequestBody(userMsg, systemPrompt);
+
+	// Add to history
+	{
+		std::lock_guard<std::mutex> lock(m_historyMutex);
+		m_history.push_back({ L"system", systemPrompt, std::chrono::system_clock::now() });
+		m_history.push_back({ L"user", userMsg, std::chrono::system_clock::now() });
+	}
+
+	m_processing.store(true);
+	m_cancelled.store(false);
+	m_workerThread = std::make_unique<std::thread>(&AIService::ProcessRequest, this, body);
+	return true;
+}
+
+bool AIService::ContinueRolePlay(const std::wstring& userLine)
+{
+	if (m_processing.load()) return false;
+	m_currentMode = L"role_play";
+
+	std::wstring systemPrompt = L"Continue the role-play dialogue. Stay in character. "
+		L"If the user made errors, model the correct form naturally in your response. "
+		L"Keep the conversation going and gently guide.";
+
+	std::wstring body = BuildRolePlayRequestBody(userLine, systemPrompt);
+
+	{
+		std::lock_guard<std::mutex> lock(m_historyMutex);
+		m_history.push_back({ L"user", userLine, std::chrono::system_clock::now() });
+	}
+
+	m_processing.store(true);
+	m_cancelled.store(false);
+	m_workerThread = std::make_unique<std::thread>(&AIService::ProcessRequest, this, body);
+	return true;
+}
+
+// ─── 3. Sentence Pattern Substitution ──────────────
+
+bool AIService::GeneratePatternExercise(const std::wstring& corePattern,
+	const std::wstring& lessonContext)
+{
+	if (m_processing.load()) return false;
+	m_currentMode = L"sentence_pattern";
+
+	std::wstring systemPrompt = L"You are an English grammar exercise generator.\n";
+	systemPrompt += L"Generate a sentence pattern substitution exercise.\n";
+	systemPrompt += L"Core pattern: " + corePattern + L"\n";
+	systemPrompt += L"Lesson context: " + lessonContext + L"\n\n";
+	systemPrompt += L"Respond with a JSON object containing:\n";
+	systemPrompt += L"{\"pattern\":\"<core pattern>\",\"exercise\":{\"keyword\":\"<replacement word>\",";
+	systemPrompt += L"\"expected_answer\":\"<correct sentence using the keyword>\",";
+	systemPrompt += L"\"hint\":\"<hint if user struggles>\"}}\n";
+	systemPrompt += L"Make sure the exercise is appropriate for the lesson level.";
+
+	std::wstring userMsg = L"Generate a sentence pattern exercise for: " + corePattern;
+
+	std::wstring body = BuildPatternCheckBody(userMsg, systemPrompt);
+	m_processing.store(true);
+	m_cancelled.store(false);
+	m_workerThread = std::make_unique<std::thread>(&AIService::ProcessRequest, this, body);
+	return true;
+}
+
+bool AIService::CheckPatternAnswer(const std::wstring& userAnswer,
+	const std::wstring& pattern,
+	const std::wstring& keyword,
+	const std::wstring& expectedAnswer)
+{
+	if (m_processing.load()) return false;
+	m_currentMode = L"sentence_pattern";
+
+	std::wstring systemPrompt = L"You are an English grammar exercise checker.\n";
+	systemPrompt += L"Pattern: " + pattern + L"\n";
+	systemPrompt += L"Keyword to use: " + keyword + L"\n";
+	systemPrompt += L"Expected answer: " + expectedAnswer + L"\n";
+	systemPrompt += L"User's answer: " + userAnswer + L"\n\n";
+	systemPrompt += L"Evaluate the answer. Respond in JSON:\n";
+	systemPrompt += L"{\"correct\":true/false,\"feedback\":\"<explain what's right/wrong>\",";
+	systemPrompt += L"\"hint\":\"<hint if wrong>\",\"correct_answer\":\"<the correct sentence>\"}";
+
+	std::wstring body = BuildPatternCheckBody(userAnswer, systemPrompt);
+	m_processing.store(true);
+	m_cancelled.store(false);
+	m_workerThread = std::make_unique<std::thread>(&AIService::ProcessRequest, this, body);
+	return true;
+}
+
+// ─── 4. Free Conversation ──────────────────────────
+
+bool AIService::StartFreeConversation(const std::wstring& topic,
+	const std::vector<std::wstring>& targetVocab,
+	const std::wstring& lessonContext)
+{
+	if (m_processing.load()) return false;
+	m_currentMode = L"free_conversation";
+
+	std::wstring systemPrompt = L"You are a friendly English conversation partner.\n";
+	systemPrompt += L"TOPIC: " + topic + L"\n\n";
+	systemPrompt += L"TARGET VOCABULARY (guide the user to use these words):\n";
+	for (auto& v : targetVocab) {
+		systemPrompt += L"  - " + v + L"\n";
+	}
+	systemPrompt += L"\nRULES:\n";
+	systemPrompt += L"1. Have a natural, engaging conversation about the topic.\n";
+	systemPrompt += L"2. Subtly guide the user to use the target vocabulary words.\n";
+	systemPrompt += L"3. Ask open-ended questions to encourage longer responses.\n";
+	systemPrompt += L"4. Gently correct major grammar errors by modeling correct usage.\n";
+	systemPrompt += L"5. Keep responses conversational and encourage the user.\n";
+	systemPrompt += L"6. Track which vocabulary words the user uses.\n";
+	systemPrompt += L"7. Start by introducing the topic naturally.\n\n";
+	systemPrompt += L"Lesson context:\n" + lessonContext;
+
+	std::wstring userMsg = L"Let's talk about: " + topic;
+
+	std::wstring body = BuildRolePlayRequestBody(userMsg, systemPrompt);
+
+	{
+		std::lock_guard<std::mutex> lock(m_historyMutex);
+		m_history.clear();
+		m_history.push_back({ L"system", systemPrompt, std::chrono::system_clock::now() });
+		m_history.push_back({ L"user", userMsg, std::chrono::system_clock::now() });
+	}
+
+	m_processing.store(true);
+	m_cancelled.store(false);
+	m_workerThread = std::make_unique<std::thread>(&AIService::ProcessRequest, this, body);
+	return true;
+}
+
+bool AIService::ContinueFreeConversation(const std::wstring& userMessage)
+{
+	if (m_processing.load()) return false;
+	m_currentMode = L"free_conversation";
+
+	std::wstring systemPrompt = L"Continue the free conversation. Be engaging. "
+		L"Guide the user to use target vocabulary naturally. Ask follow-up questions.";
+
+	std::wstring body = BuildRolePlayRequestBody(userMessage, systemPrompt);
+
+	{
+		std::lock_guard<std::mutex> lock(m_historyMutex);
+		m_history.push_back({ L"user", userMessage, std::chrono::system_clock::now() });
+	}
+
+	m_processing.store(true);
+	m_cancelled.store(false);
+	m_workerThread = std::make_unique<std::thread>(&AIService::ProcessRequest, this, body);
+	return true;
+}
+
+bool AIService::EndFreeConversation()
+{
+	if (m_processing.load()) return false;
+	m_currentMode = L"free_conversation_end";
+
+	std::wstring systemPrompt = L"The free conversation has ended. "
+		L"Review the conversation and provide a vocabulary usage summary. "
+		L"List which target vocabulary words the user used, which they missed, "
+		L"and give an overall assessment of their performance. "
+		L"Respond in JSON:\n"
+		L"{\"vocab_used\":[\"word1\",\"word2\"],\"vocab_missed\":[\"word3\"],"
+		L"\"vocab_usage_rate\":75,\"summary\":\"<feedback>\","
+		L"\"grammar_score\":80,\"vocab_score\":75,\"fluency_score\":80}";
+
+	std::wstring userMsg = L"Please summarize my vocabulary usage from this conversation.";
+
+	std::wstring body = BuildPatternCheckBody(userMsg, systemPrompt);
+	m_processing.store(true);
+	m_cancelled.store(false);
+	m_workerThread = std::make_unique<std::thread>(&AIService::ProcessRequest, this, body);
+	return true;
+}
+
+// ─── 5. Grammar Correction ─────────────────────────
+
+bool AIService::CorrectGrammar(const std::wstring& userSpeech,
+	const std::wstring& topicContext)
+{
+	if (m_processing.load()) return false;
+	m_currentMode = L"grammar_correction";
+
+	std::wstring systemPrompt = L"You are a professional English grammar tutor.\n";
+	systemPrompt += L"Analyze the user's speech sentence by sentence and correct all grammar errors.\n\n";
+	systemPrompt += L"Topic context: " + topicContext + L"\n\n";
+	systemPrompt += L"User's speech:\n\"\"\"\n" + userSpeech + L"\n\"\"\"\n\n";
+	systemPrompt += L"Respond in JSON format:\n";
+	systemPrompt += L"{\n";
+	systemPrompt += L"  \"overall_grammar_score\": 75,\n";
+	systemPrompt += L"  \"corrections\": [\n";
+	systemPrompt += L"    {\n";
+	systemPrompt += L"      \"original\": \"<original sentence>\",\n";
+	systemPrompt += L"      \"corrected\": \"<corrected version>\",\n";
+	systemPrompt += L"      \"explanation\": \"<grammar point>\",\n";
+	systemPrompt += L"      \"error_type\": \"<tense/article/preposition/word_order/etc>\"\n";
+	systemPrompt += L"    }\n";
+	systemPrompt += L"  ],\n";
+	systemPrompt += L"  \"summary\": \"<overall assessment>\",\n";
+	systemPrompt += L"  \"strengths\": [\"<what user did well>\"],\n";
+	systemPrompt += L"  \"weak_areas\": [\"<what needs improvement>\"]\n";
+	systemPrompt += L"}\n";
+	systemPrompt += L"Only include sentences that have errors. If a sentence is correct, don't include it.";
+
+	std::wstring body = BuildGrammarCorrectionBody(userSpeech, systemPrompt);
+	m_processing.store(true);
+	m_cancelled.store(false);
+	m_workerThread = std::make_unique<std::thread>(&AIService::ProcessRequest, this, body);
+	return true;
+}
+
+// ─── 6. Learning Report ────────────────────────────
+
+bool AIService::GenerateLearningReport(const std::wstring& statsJson)
+{
+	if (m_processing.load()) return false;
+	m_currentMode = L"learning_report";
+
+	std::wstring body = BuildReportBody(statsJson);
+	m_processing.store(true);
+	m_cancelled.store(false);
+	m_workerThread = std::make_unique<std::thread>(&AIService::ProcessRequest, this, body);
+	return true;
+}
+
+// ─── Helper Builders ───────────────────────────────
+
+std::wstring AIService::BuildRolePlayRequestBody(const std::wstring& content,
+	const std::wstring& systemPrompt) const
+{
+	auto& cfg = ConfigManager::Instance();
+	std::wstring body = L"{";
+	body += L"\"model\":\"" + cfg.GetModelName() + L"\",";
+	body += L"\"messages\":[";
+	body += L"{\"role\":\"system\",\"content\":\"" + JsonEscape(systemPrompt) + L"\"},";
+
+	{
+		std::lock_guard<std::mutex> lock(m_historyMutex);
+		size_t start = m_history.size() > 8 ? m_history.size() - 8 : 0;
+		for (size_t i = start; i < m_history.size(); i++) {
+			if (m_history[i].role != L"system") {
+				body += L"{\"role\":\"" + m_history[i].role +
+					L"\",\"content\":\"" + JsonEscape(m_history[i].content) + L"\"},";
+			}
+		}
+	}
+
+	body += L"{\"role\":\"user\",\"content\":\"" + JsonEscape(content) + L"\"}";
+	body += L"],";
+	body += L"\"max_tokens\":1024,";
+	body += L"\"temperature\":0.8";
+	body += L"}";
+	return body;
+}
+
+std::wstring AIService::BuildPatternCheckBody(const std::wstring& content,
+	const std::wstring& systemPrompt) const
+{
+	auto& cfg = ConfigManager::Instance();
+	std::wstring body = L"{";
+	body += L"\"model\":\"" + cfg.GetModelName() + L"\",";
+	body += L"\"messages\":[";
+	body += L"{\"role\":\"system\",\"content\":\"" + JsonEscape(systemPrompt) + L"\"},";
+	body += L"{\"role\":\"user\",\"content\":\"" + JsonEscape(content) + L"\"}";
+	body += L"],";
+	body += L"\"max_tokens\":512,";
+	body += L"\"temperature\":0.5";
+	body += L"}";
+	return body;
+}
+
+std::wstring AIService::BuildGrammarCorrectionBody(const std::wstring& content,
+	const std::wstring& systemPrompt) const
+{
+	auto& cfg = ConfigManager::Instance();
+	std::wstring body = L"{";
+	body += L"\"model\":\"" + cfg.GetModelName() + L"\",";
+	body += L"\"messages\":[";
+	body += L"{\"role\":\"system\",\"content\":\"" + JsonEscape(systemPrompt) + L"\"},";
+	body += L"{\"role\":\"user\",\"content\":\"" + JsonEscape(content) + L"\"}";
+	body += L"],";
+	body += L"\"max_tokens\":1024,";
+	body += L"\"temperature\":0.3";
+	body += L"}";
+	return body;
+}
+
+std::wstring AIService::BuildReportBody(const std::wstring& statsJson) const
+{
+	auto& cfg = ConfigManager::Instance();
+	std::wstring systemPrompt = L"You are a language learning analytics assistant. "
+		L"Based on the provided statistics, generate a personalized learning report. "
+		L"Include: progress summary, skill breakdown analysis, areas for improvement, "
+		L"and encouraging next steps. Respond in a natural, motivational tone.";
+
+	std::wstring body = L"{";
+	body += L"\"model\":\"" + cfg.GetModelName() + L"\",";
+	body += L"\"messages\":[";
+	body += L"{\"role\":\"system\",\"content\":\"" + JsonEscape(systemPrompt) + L"\"},";
+	body += L"{\"role\":\"user\",\"content\":\"Learning statistics:\\n" + JsonEscape(statsJson) + L"\"}";
+	body += L"],";
+	body += L"\"max_tokens\":800,";
+	body += L"\"temperature\":0.7";
+	body += L"}";
+	return body;
 }
