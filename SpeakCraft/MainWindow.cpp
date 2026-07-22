@@ -64,8 +64,9 @@ bool MainWindow::Create(int nCmdShow)
 
 LRESULT CALLBACK MainWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
-	if (g_pMainWindow && g_pMainWindow->m_hwnd == hwnd)
+	if (g_pMainWindow && (!g_pMainWindow->m_hwnd || g_pMainWindow->m_hwnd == hwnd))
 	{
+		g_pMainWindow->m_hwnd = hwnd;
 		return g_pMainWindow->HandleMessage(msg, wp, lp);
 	}
 	return DefWindowProc(hwnd, msg, wp, lp);
@@ -416,67 +417,29 @@ void MainWindow::SelectLesson(const std::wstring& bookId, int lessonNumber)
 
 void MainWindow::DisplayLesson(const Lesson& lesson)
 {
-	// Build rich text for the lesson content
 	std::wstring text;
+	text += lesson.bookName + L"\r\n";
+	text += L"Lesson " + std::to_wstring(lesson.lessonNumber) + L": " + lesson.title + L"\r\n\r\n";
+	text += L"Key Grammar:\r\n" + lesson.keyGrammar + L"\r\n\r\n";
+	text += L"Dialogue / Text:\r\n" + lesson.dialogueText + L"\r\n\r\n";
 
-	// Title
-	text += L"{\\rtf1\\ansi\\deff0\n";
-	text += L"{\\fonttbl{\\f0 Segoe UI;}}\n";
-	text += L"\\f0\\fs28\\b " + lesson.bookName + L"\\b0\\par\n";
-	text += L"\\fs32\\b Lesson " + std::to_wstring(lesson.lessonNumber) +
-		L": " + lesson.title + L"\\b0\\par\\par\n";
-
-	// Grammar
-	text += L"\\fs22\\b 📝 Key Grammar:\\b0\\par\n";
-	text += L"\\fs20 " + lesson.keyGrammar + L"\\par\\par\n";
-
-	// Dialogue
-	text += L"\\fs22\\b 📄 Dialogue / Text:\\b0\\par\n";
-	// Replace \n with \par for RTF
-	std::wstring dialogue = lesson.dialogueText;
-	size_t pos = 0;
-	while ((pos = dialogue.find(L'\n', pos)) != std::wstring::npos)
-	{
-		dialogue.replace(pos, 1, L"\\par ");
-		pos += 5;
-	}
-	text += L"\\fs20 " + dialogue + L"\\par\\par\n";
-
-	// Vocabulary
 	if (!lesson.vocabulary.empty())
 	{
-		text += L"\\fs22\\b 📚 Key Vocabulary:\\b0\\par\n";
+		text += L"Key Vocabulary:\r\n";
 		for (auto& v : lesson.vocabulary)
 		{
-			text += L"\\fs20\\b " + v.word + L"\\b0  " +
-				v.phonetic + L" — " + v.translation + L"\\par\n";
+			text += L"  " + v.word + L"  " + v.phonetic + L" - " + v.translation + L"\r\n";
 			if (!v.exampleSentence.empty())
 			{
-				text += L"\\fs18\\i    Example: " + v.exampleSentence + L"\\i0\\par\n";
+				text += L"    Example: " + v.exampleSentence + L"\r\n";
 			}
 		}
-		text += L"\\par\n";
+		text += L"\r\n";
 	}
 
-	// Practice prompt
-	text += L"\\fs22\\b 🎯 Practice Focus:\\b0\\par\n";
-	text += L"\\fs20 " + lesson.practicePrompt + L"\\par\n";
-	text += L"}";
+	text += L"Practice Focus:\r\n" + lesson.practicePrompt + L"\r\n";
 
-	// Set RTF text
-	std::string utf8Text;
-	int len = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.length()),
-		nullptr, 0, nullptr, nullptr);
-	utf8Text.resize(len);
-	WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.length()),
-		&utf8Text[0], len, nullptr, nullptr);
-
-	SETTEXTEX st = {};
-	st.flags = ST_DEFAULT;
-	st.codepage = CP_UTF8;
-	SendMessage(m_hwndLessonContent, EM_SETTEXTEX,
-		reinterpret_cast<WPARAM>(&st),
-		reinterpret_cast<LPARAM>(utf8Text.c_str()));
+	SetWindowTextW(m_hwndLessonContent, text.c_str());
 
 	// Scroll to top
 	SendMessage(m_hwndLessonContent, EM_SETSEL, 0, 0);
@@ -887,18 +850,29 @@ INT_PTR CALLBACK VoiceSettingsDlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
 		{
 			HWND hList = GetDlgItem(hDlg, IDC_VOICE_LIST);
 			int idx = (int)SendMessage(hList, LB_GETCURSEL, 0, 0);
-			if (idx != LB_ERR)
+			if (idx == LB_ERR)
 			{
-				wchar_t buf[256] = {};
-				SendMessageW(hList, LB_GETTEXT, idx, reinterpret_cast<LPARAM>(buf));
-				if (g_pMainWindow)
+				MessageBoxW(hDlg, L"Please select a voice first.",
+					L"Voice Test", MB_OK | MB_ICONINFORMATION);
+				return TRUE;
+			}
+
+			wchar_t buf[256] = {};
+			SendMessageW(hList, LB_GETTEXT, idx, reinterpret_cast<LPARAM>(buf));
+			if (g_pMainWindow)
+			{
+				auto* pSpeech = g_pMainWindow->GetSpeechService();
+				if (pSpeech)
 				{
-					auto* pSpeech = g_pMainWindow->GetSpeechService();
-					if (pSpeech)
+					int rate = (int)GetDlgItemInt(hDlg, IDC_VOICE_RATE, nullptr, TRUE);
+					pSpeech->StopSpeaking();
+					pSpeech->Initialize();
+					pSpeech->SetRate(rate);
+					if (!pSpeech->SetVoice(buf) ||
+						!pSpeech->SpeakAsync(L"Hello. This is a voice test for SpeakCraft.", hDlg))
 					{
-						pSpeech->StopSpeaking();
-						pSpeech->SetVoice(buf);
-						pSpeech->Speak(L"Hello! This is a voice test for SpeakCraft.");
+						MessageBoxW(hDlg, L"Voice playback failed. Check Windows speech settings and audio output.",
+							L"Voice Test", MB_OK | MB_ICONERROR);
 					}
 				}
 			}
