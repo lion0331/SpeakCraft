@@ -110,6 +110,9 @@
   <ItemGroup>
     <ResourceCompile Include="SpeakCraft.rc" />
   </ItemGroup>
+  <ItemGroup>
+    <Image Include="ICO\ShakaFHD.ico" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
