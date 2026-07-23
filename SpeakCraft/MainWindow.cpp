@@ -46,11 +46,11 @@ bool MainWindow::Create(int nCmdShow)
 	wc.style = CS_HREDRAW | CS_VREDRAW;
 	wc.lpfnWndProc = WndProc;
 	wc.hInstance = m_hInstance;
-	wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
+	wc.hIcon = LoadIcon(m_hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
 	wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
 	wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
 	wc.lpszClassName = WINDOW_CLASS;
-	wc.hIconSm = wc.hIcon;
+	wc.hIconSm = LoadIcon(m_hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
 
 	if (!RegisterClassExW(&wc)) return false;
 

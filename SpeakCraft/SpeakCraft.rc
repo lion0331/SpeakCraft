@@ -5,8 +5,7 @@
 #include "Resource.h"
 
 // ─── Icon ─────────────────────────────────────────
-// Icon is loaded from system default — replace with custom app.ico
-// IDI_APP_ICON        ICON    "app.ico"
+IDI_APP_ICON        ICON    "ICO\\ShakaFHD.ico"
 
 // ─── Main Menu ────────────────────────────────────
 IDR_MAIN_MENU MENU
